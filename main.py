@@ -1,551 +1,696 @@
-import csv
-import json
-import os
-import random
-import tkinter as tk
-from tkinter import messagebox, ttk, filedialog
-import customtkinter as ctk
-from tkcalendar import DateEntry
-from PIL import Image, ImageDraw
+import json, os, random, sys, math, io
 
-# Настройки темы
-ctk.set_appearance_mode("Dark")
-ctk.set_default_color_theme("blue")
+import pandas as pd
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QLineEdit, QComboBox, QTabWidget,
+    QFileDialog, QMessageBox, QScrollArea, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit,
+    QGridLayout, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QTimer, QDate, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QPixmap, QLinearGradient, QFont, QPalette
 
-# Файл для хранения Тугриков и Списка задач
-DATA_FILE = "app_internal_data.json"
+DATA_FILE  = "app_internal_data.json"
 IMAGES_DIR = "images"
+MAX_REWARD = 200
 
-# Создаем папку для картинок магазина, если ее нет
 if not os.path.exists(IMAGES_DIR):
     os.makedirs(IMAGES_DIR)
 
+DARK = {
+    "bg":       "#2b2b2b", "surface":  "#3a3a3a", "surface2": "#424242",
+    "border":   "#545454", "accent":   "#5b7fc7", "positive": "#4caf7d",
+    "negative": "#c75b5b", "text":     "#e8e8e8", "text_dim": "#999999",
+    "row_alt":  "#333333", "select":   "#3d4f6e",
+    "dice_bg1": "#484848", "dice_bg2": "#333333",
+}
+LIGHT = {
+    "bg":       "#f0f0f0", "surface":  "#ffffff", "surface2": "#ebebeb",
+    "border":   "#cccccc", "accent":   "#4a6abf", "positive": "#3a9e6a",
+    "negative": "#c03030", "text":     "#1a1a1a", "text_dim": "#666666",
+    "row_alt":  "#f7f7f7", "select":   "#c5d3ee",
+    "dice_bg1": "#e0e0e0", "dice_bg2": "#cccccc",
+}
+PIE_COLORS = ["#5b7fc7","#e08040","#4caf7d","#9b59b6","#e74c3c","#1abc9c","#f1c40f","#e67e22"]
+CATS_EXP = ["Продукты","Транспорт","Жилье","Здоровье","Развлечения","Досуг","Перевод","Наличка","Прочее"]
+CATS_INC = ["Зарплата","Перевод","Наличка"]
 
-class FinanceApp(ctk.CTk):
+
+class DiceWidget(QWidget):
     def __init__(self):
         super().__init__()
-        self.title("Управление финансами и Тугрики")
-        self.geometry("1350x850")
-        self._current_theme = "Dark"
-        self.configure(bg="#1a1a1a")
+        self.setFixedSize(160, 160)
+        self._value = "?"; self._color = QColor("#5b7fc7")
+        self._scale = 1.0; self._bg1 = QColor("#484848"); self._bg2 = QColor("#333333")
+        self.setAutoFillBackground(True)
 
-        # Переменные данных
-        self.current_csv_path = None
-        self.operations = []
-        self.tasks = []
-        self.purchased_items = []  # Новый список для покупок
-        self.tugriki = 0
+    def update_theme(self, t):
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(t["surface"]))
+        self.setPalette(pal)
+        self._bg1 = QColor(t["dice_bg1"]); self._bg2 = QColor(t["dice_bg2"])
+        self.update()
 
-        # Наполнение магазина
-        self.shop_items = [
-            {"name": "Вечер кино", "price": 50},
-            {"name": "Вкусный ужин", "price": 150},
-            {"name": "Выходной от дел", "price": 500},
-            {"name": "Подарок себе", "price": 1000}
-        ]
+    def set_face(self, value, color, scale=1.0):
+        self._value = str(value); self._color = QColor(color); self._scale = scale
+        self.update()
 
-        # Кэш для картинок, чтобы они не удалялись сборщиком мусора
-        self.image_cache = {}
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), self.palette().color(QPalette.ColorRole.Window))
+        cx = cy = 80; h = int(58 * self._scale); r = h * 0.28
+        p.setBrush(QBrush(QColor(0,0,0,55))); p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(cx-h+7, cy-h+7, h*2, h*2, r, r)
+        grad = QLinearGradient(cx-h, cy-h, cx+h, cy+h)
+        grad.setColorAt(0, self._bg1); grad.setColorAt(1, self._bg2)
+        p.setBrush(QBrush(grad)); p.setPen(QPen(self._color, 2.5))
+        p.drawRoundedRect(cx-h, cy-h, h*2, h*2, r, r)
+        p.setFont(QFont("Segoe UI", max(10, int(44*self._scale)), QFont.Weight.Bold))
+        p.setPen(self._color)
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._value)
+        p.end()
 
-        self._load_internal_data()
-        self._setup_styles()
-        self._build_ui()
 
-    # ================= ЛОГИКА ФАЙЛОВ И ДАННЫХ =================
+class ExclTag(QFrame):
+    removed = pyqtSignal(int)
+    def __init__(self, n, accent):
+        super().__init__(); self.n = n
+        lay = QHBoxLayout(self); lay.setContentsMargins(8,2,4,2); lay.setSpacing(4)
+        self.setFixedHeight(26)
+        lbl = QLabel(str(n)); lbl.setStyleSheet(f"color:{accent};font-weight:bold;font-size:12px;background:transparent;")
+        btn = QPushButton("✕"); btn.setFixedSize(16,16)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet("QPushButton{background:transparent;border:none;}QPushButton:hover{color:white;}")
+        btn.clicked.connect(lambda: self.removed.emit(self.n))
+        lay.addWidget(lbl); lay.addWidget(btn)
+        self.setStyleSheet(f"QFrame{{background:{accent}28;border-radius:11px;border:1px solid {accent}55;}}")
 
-    def _load_internal_data(self):
-        """Загрузка задач, баланса и покупок"""
-        if os.path.exists(DATA_FILE):
-            try:
-                with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.tasks = data.get("tasks", [])
-                    self.tugriki = data.get("tugriki", 0)
-                    self.purchased_items = data.get("purchased", [])
-            except:
-                pass
 
-    def _save_internal_data(self):
-        """Сохранение задач, баланса и покупок"""
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({
-                "tasks": self.tasks,
-                "tugriki": self.tugriki,
-                "purchased": self.purchased_items
-            }, f, ensure_ascii=False, indent=2)
+class PieWidget(QWidget):
+    def __init__(self, entry_type="Расход"):
+        super().__init__()
+        self.entry_type = entry_type
+        self._data  = []
+        self._theme = DARK
+        self._title = "Расходы по категориям" if entry_type=="Расход" else "Доходы по категориям"
+        self._empty = "Нет данных о расходах" if entry_type=="Расход" else "Нет данных о доходах"
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(180)
 
-    def _select_csv(self):
-        path = filedialog.askopenfilename(filetypes=[("CSV файлы", "*.csv")])
-        if path:
-            self.current_csv_path = path
-            self.lbl_file_path.configure(text=f"Файл: {os.path.basename(path)}")
-            self._refresh_table_from_csv()
+    def plot(self, df, theme):
+        self._theme = theme; self._data = []
+        pal = ["#5b7fc7","#e08040","#4caf7d","#9b59b6","#e74c3c","#1abc9c","#f1c40f","#e67e22"] \
+              if self.entry_type=="Расход" else \
+              ["#4caf7d","#2e86ab","#74c69d","#457b9d","#52b788","#a8dadc","#1d3557"]
+        if not df.empty and "Type" in df.columns and "Amount" in df.columns:
+            exp = df[df["Type"].astype(str).str.strip()==self.entry_type].copy()
+            exp["Amount"] = pd.to_numeric(exp["Amount"],errors="coerce").fillna(0)
+            grp = exp.groupby("Category")["Amount"].sum()
+            grp = grp[grp>0].sort_values(ascending=False)
+            for i,(cat,val) in enumerate(grp.items()):
+                self._data.append((cat, float(val), pal[i%len(pal)]))
+        self.update()
 
-    def _create_csv(self):
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV файлы", "*.csv")])
-        if path:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Date", "Type", "Category", "Amount", "Comment"])
-            self.current_csv_path = path
-            self.lbl_file_path.configure(text=f"Файл: {os.path.basename(path)}")
-            self._refresh_table_from_csv()
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = self._theme; W = self.width(); H = self.height()
+        p.fillRect(0,0,W,H, QColor(t["surface"]))
 
-    def _refresh_table_from_csv(self):
-        for i in self.tree.get_children(): self.tree.delete(i)
-        if not self.current_csv_path: return
+        p.setFont(QFont("Segoe UI",10,QFont.Weight.Bold))
+        p.setPen(QColor(t["text"]))
+        p.drawText(0,4,W,22, Qt.AlignmentFlag.AlignHCenter, self._title)
 
-        try:
-            with open(self.current_csv_path, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    self.tree.insert("", "end",
-                                     values=(row["Date"], row["Type"], row["Category"], row["Amount"], row["Comment"]))
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось прочитать файл: {e}")
+        if not self._data:
+            p.setFont(QFont("Segoe UI",10)); p.setPen(QColor(t["text_dim"]))
+            p.drawText(0,H//2-10,W,20, Qt.AlignmentFlag.AlignHCenter, self._empty)
+            p.end(); return
 
-    # ================= УТИЛИТЫ ДЛЯ КАРТИНОК =================
+        from PyQt6.QtCore import QRectF
+        leg_rows = math.ceil(len(self._data)/3)
+        leg_h    = leg_rows*22+8
+        pie_top  = 30; pie_bot = H-leg_h-8
+        pie_h    = pie_bot-pie_top
+        diam     = max(40, min(W-20, pie_h)-4)
+        cx=W//2; cy=pie_top+pie_h//2; r=diam//2
+        total = sum(v for _,v,_ in self._data)
 
-    def _get_shop_image(self, item_name):
-        """Пытается загрузить картинку, если ее нет - рисует цветной квадрат-заглушку"""
-        if item_name in self.image_cache:
-            return self.image_cache[item_name]
+        angle = 90.0
+        for label,val,hex_c in self._data:
+            sweep = (val/total)*360.0
+            p.setBrush(QBrush(QColor(hex_c)))
+            p.setPen(QPen(QColor(t["surface"]),2))
+            p.drawPie(QRectF(cx-r,cy-r,diam,diam), int(angle*16), int(-sweep*16))
+            if sweep>15:
+                mid = math.radians(angle-sweep/2)
+                tx = cx+(r*0.62)*math.cos(mid); ty = cy-(r*0.62)*math.sin(mid)
+                p.setFont(QFont("Segoe UI",7,QFont.Weight.Bold))
+                p.setPen(QColor("white"))
+                p.drawText(int(tx)-20,int(ty)-8,40,16, Qt.AlignmentFlag.AlignHCenter, f"{val/total*100:.1f}%")
+            angle -= sweep
 
-        img_path = os.path.join(IMAGES_DIR, f"{item_name}.png")
-        if os.path.exists(img_path):
-            img = Image.open(img_path)
-        else:
-            # Создаем заглушку
-            img = Image.new('RGB', (120, 120),
-                            color=(random.randint(40, 100), random.randint(40, 100), random.randint(60, 150)))
-            d = ImageDraw.Draw(img)
-            # Рисуем первую букву названия для красоты
-            d.text((45, 45), item_name[0].upper(), fill=(255, 255, 255))
+        n = len(self._data); cols = min(n,3); cell_w = W//cols
+        p.setFont(QFont("Segoe UI",8))
+        for i,(label,val,hex_c) in enumerate(self._data):
+            ci=i%cols; ri=i//cols
+            lx=ci*cell_w+6; ly=pie_bot+6+ri*22
+            p.setBrush(QBrush(QColor(hex_c))); p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(lx,ly+3,12,12,3,3)
+            p.setPen(QColor(t["text"]))
+            fm=p.fontMetrics()
+            txt=fm.elidedText(label,Qt.TextElideMode.ElideRight,cell_w-22)
+            p.drawText(lx+16,ly,cell_w-20,18,Qt.AlignmentFlag.AlignVCenter,txt)
+        p.end()
 
-        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(120, 120))
-        self.image_cache[item_name] = ctk_img
-        return ctk_img
 
-    # ================= ИНТЕРФЕЙС =================
+class App(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Управление финансами и Тугрики")
+        self.resize(1350,860)
+        self.is_dark=True; self.theme=DARK
+        self.csv_path=None
+        self.df=pd.DataFrame(columns=["Date","Type","Category","Amount","Comment"])
+        self.state=load_data()
+        self.excl=[]
+        self.image_cache={}
+        self._dice_timer=QTimer(); self._dice_timer.timeout.connect(self._dice_tick)
+        self._dice_frames=0; self._dice_delay=30; self._dice_avail=[]
+        self._bounce_step=0; self._bounce_val=0
+        self.SHOP=[{"name":"Вечер кино","price":50},{"name":"Вкусный ужин","price":150},
+                   {"name":"Выходной от дел","price":500},{"name":"Подарок себе","price":1000}]
+        self._build(); self._apply_theme()
 
-    def _setup_styles(self):
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", borderwidth=0)
-        style.configure("Treeview.Heading", background="#1f538d", foreground="white", relief="flat")
-        style.map("Treeview", background=[('selected', '#1f538d')])
+    # ── данные ──────────────────────────────────────────────────────────────
+    def _save(self):
+        with open(DATA_FILE,"w",encoding="utf-8") as f:
+            json.dump(self.state,f,ensure_ascii=False,indent=2)
 
-    def _build_ui(self):
-        top_panel = ctk.CTkFrame(self, height=70)
-        top_panel.pack(side=tk.TOP, fill=tk.X, padx=20, pady=10)
+    def _update_tug(self):
+        self.tug_lbl.setText(f"Тугрики: {self.state['tugriki']} 💰")
 
-        self.lbl_file_path = ctk.CTkLabel(top_panel, text="Файл не выбран", font=("Roboto", 12, "italic"))
-        self.lbl_file_path.pack(side=tk.LEFT, padx=15)
-
-        ctk.CTkButton(top_panel, text="Открыть CSV", width=110, command=self._select_csv).pack(side=tk.LEFT, padx=5)
-        ctk.CTkButton(top_panel, text="Создать CSV", width=110, fg_color="transparent", border_width=1,
-                      command=self._create_csv).pack(side=tk.LEFT, padx=5)
-
-        self.tugriki_var = tk.StringVar(value=f"Тугрики: {self.tugriki} 💰")
-        ctk.CTkLabel(top_panel, textvariable=self.tugriki_var, font=("Roboto", 20, "bold"), text_color="#facc15").pack(
-            side=tk.RIGHT, padx=20)
-
-        self.theme_btn = ctk.CTkButton(top_panel, text="☀️ Светлая", width=120, fg_color="transparent",
-                                       border_width=1, command=self._toggle_theme)
-        self.theme_btn.pack(side=tk.RIGHT, padx=5)
-
-        self.tabs = ctk.CTkTabview(self)
-        self.tabs.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        self.tabs.add("Финансы")
-        self.tabs.add("Задачи")
-        self.tabs.add("Магазин")
-        self.tabs.add("Кубик")
-
-        self._init_finance_tab()
-        self._init_tasks_tab()
-        self._init_shop_tab()
-        self._init_dice_tab()
+    # ── тема ────────────────────────────────────────────────────────────────
+    def _apply_theme(self):
+        t=self.theme
+        self.setStyleSheet(f"""
+            QMainWindow,QWidget#central{{background:{t['bg']};}}
+            QTabWidget::pane{{background:{t['surface']};border:none;margin-top:0;}}
+            QTabBar{{background:transparent;border:none;}}
+            QTabBar::tab{{background:{t['surface2']};color:{t['text_dim']};
+                padding:8px 22px;font-size:13px;font-weight:600;border:1px solid {t['border']};
+                border-bottom:none;margin-right:3px;
+                border-top-left-radius:8px;border-top-right-radius:8px;}}
+            QTabBar::tab:selected{{background:{t['accent']};color:white;border-color:{t['accent']};}}
+            QTabBar::tab:hover:!selected{{background:{t['border']};color:{t['text']};}}
+            QPushButton{{background:{t['accent']};color:white;border:none;border-radius:7px;
+                padding:7px 16px;font-size:13px;font-weight:600;}}
+            QPushButton:hover{{background:{t['accent']}dd;}}
+            QPushButton:disabled{{background:{t['border']};color:{t['text_dim']};}}
+            QPushButton#outline{{background:transparent;border:1.5px solid {t['accent']};color:{t['accent']};}}
+            QPushButton#outline:hover{{background:{t['accent']}18;}}
+            QPushButton#red{{background:#c75b5b;color:white;}}
+            QPushButton#red:hover{{background:#e05555;}}
+            QLineEdit,QComboBox,QDateEdit{{background:{t['surface2']};border:1px solid {t['border']};
+                border-radius:6px;padding:5px 10px;color:{t['text']};font-size:13px;}}
+            QLineEdit:focus,QComboBox:focus,QDateEdit:focus{{border-color:{t['accent']};}}
+            QComboBox::drop-down{{border:none;width:20px;}}
+            QComboBox QAbstractItemView{{background:{t['surface']};color:{t['text']};
+                selection-background-color:{t['select']};border:1px solid {t['border']};}}
+            QTableWidget{{background:{t['surface']};alternate-background-color:{t['row_alt']};
+                color:{t['text']};gridline-color:{t['border']};border:none;font-size:13px;
+                selection-background-color:{t['select']};selection-color:{t['text']};}}
+            QHeaderView::section{{background:{t['surface2']};color:{t['text']};padding:7px 10px;
+                font-weight:700;font-size:12px;border:none;
+                border-bottom:1px solid {t['border']};border-right:1px solid {t['border']};}}
+            QTableWidget::item{{padding:4px 8px;color:{t['text']};}}
+            QScrollBar:vertical{{background:transparent;width:6px;border-radius:3px;}}
+            QScrollBar::handle:vertical{{background:{t['border']};border-radius:3px;min-height:20px;}}
+            QScrollBar::handle:vertical:hover{{background:{t['accent']};}}
+            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
+            QScrollBar:horizontal{{background:transparent;height:6px;border-radius:3px;}}
+            QScrollBar::handle:horizontal{{background:{t['border']};border-radius:3px;}}
+            QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{{width:0;}}
+            QLabel{{color:{t['text']};background:transparent;}}
+            QFrame#card{{background:{t['surface']};border-radius:8px;border:1px solid {t['border']};}}
+            QFrame#topbar{{background:{t['surface']};border-radius:8px;border:1px solid {t['border']};}}
+            QFrame#task_a{{background:{t['surface']};border-radius:7px;border:1px solid {t['border']};}}
+            QFrame#task_d{{background:{t['row_alt']};border-radius:7px;border:1px solid {t['border']};}}
+            QFrame#col_f{{background:{t['surface']};border-radius:8px;border:1px solid {t['border']};}}
+            QScrollArea{{background:transparent;border:none;}}
+        """)
+        if hasattr(self,"tug_lbl"):
+            self.tug_lbl.setStyleSheet(f"color:{t['positive']};font-size:19px;font-weight:800;background:transparent;")
+        if hasattr(self,"dice"): self.dice.update_theme(t)
+        if hasattr(self,"pie_exp"): self.pie_exp.plot(self.df,t)
+        if hasattr(self,"pie_inc"): self.pie_inc.plot(self.df,t)
+        if hasattr(self,"theme_btn"):
+            self.theme_btn.setText("☀️ Светлая" if self.is_dark else "🌙 Тёмная")
 
     def _toggle_theme(self):
-        if self._current_theme == "Dark":
-            self._current_theme = "Light"
-            ctk.set_appearance_mode("Light")
-            self.configure(bg="#ebebeb")
-            self.theme_btn.configure(text="🌙 Тёмная")
-        else:
-            self._current_theme = "Dark"
-            ctk.set_appearance_mode("Dark")
-            self.configure(bg="#1a1a1a")
-            self.theme_btn.configure(text="☀️ Светлая")
+        self.is_dark=not self.is_dark; self.theme=DARK if self.is_dark else LIGHT
+        self._apply_theme()
 
-    # --- ВКЛАДКА ФИНАНСЫ ---
-    def _init_finance_tab(self):
-        tab = self.tabs.tab("Финансы")
-        tab.grid_columnconfigure(1, weight=1)
-        tab.grid_rowconfigure(0, weight=1)
+    # ── UI ──────────────────────────────────────────────────────────────────
+    def _build(self):
+        c=QWidget(); c.setObjectName("central"); self.setCentralWidget(c)
+        root=QVBoxLayout(c); root.setContentsMargins(12,10,12,10); root.setSpacing(8)
 
-        form = ctk.CTkFrame(tab, width=300)
-        form.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        tb=QFrame(); tb.setObjectName("topbar"); tb.setFixedHeight(52)
+        tl=QHBoxLayout(tb); tl.setContentsMargins(14,0,14,0); tl.setSpacing(8)
+        self.lbl_file=QLabel("Файл не выбран")
+        self.lbl_file.setStyleSheet("color:#999;font-style:italic;background:transparent;")
+        tl.addWidget(self.lbl_file); tl.addSpacing(6)
+        b=QPushButton("📂 Открыть CSV"); b.clicked.connect(self._open_csv); tl.addWidget(b)
+        b2=QPushButton("➕ Создать CSV"); b2.setObjectName("outline")
+        b2.clicked.connect(self._create_csv); tl.addWidget(b2)
+        tl.addStretch()
+        self.theme_btn=QPushButton("☀️ Светлая"); self.theme_btn.setObjectName("outline")
+        self.theme_btn.setFixedWidth(120); self.theme_btn.clicked.connect(self._toggle_theme)
+        tl.addWidget(self.theme_btn); tl.addSpacing(14)
+        self.tug_lbl=QLabel(f"Тугрики: {self.state['tugriki']} 💰")
+        tl.addWidget(self.tug_lbl); root.addWidget(tb)
 
-        ctk.CTkLabel(form, text="Добавить запись", font=("Roboto", 16, "bold")).pack(pady=10)
+        self.tabs=QTabWidget(); self.tabs.setDocumentMode(False)
+        root.addWidget(self.tabs)
+        self._build_finance(); self._build_tasks()
+        self._build_shop();    self._build_dice()
 
-        self.f_type = ctk.CTkOptionMenu(form, values=["Расход", "Доход"])
-        self.f_type.pack(fill=tk.X, padx=15, pady=5)
+    # ── ФИНАНСЫ ─────────────────────────────────────────────────────────────
+    def _build_finance(self):
+        tab=QWidget(); self.tabs.addTab(tab,"Финансы")
+        lay=QHBoxLayout(tab); lay.setContentsMargins(10,10,10,10); lay.setSpacing(12)
 
-        date_f = ctk.CTkFrame(form, fg_color="transparent")
-        date_f.pack(fill=tk.X, padx=15, pady=5)
-        ctk.CTkLabel(date_f, text="Дата:").pack(side=tk.LEFT)
-        self.f_date = DateEntry(date_f, background='#1f538d', foreground='white', date_pattern='yyyy-mm-dd')
-        self.f_date.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
+        form=QFrame(); form.setObjectName("card"); form.setFixedWidth(258)
+        fl=QVBoxLayout(form); fl.setContentsMargins(14,14,14,14); fl.setSpacing(9)
+        lh=QLabel("Добавить запись"); lh.setStyleSheet("font-size:14px;font-weight:700;")
+        fl.addWidget(lh)
+        self.f_type=QComboBox(); self.f_type.addItems(["Расход","Доход"])
+        self.f_type.currentTextChanged.connect(self._update_cats); fl.addWidget(self.f_type)
+        dr=QHBoxLayout(); dr.setSpacing(6); dr.addWidget(QLabel("Дата:"))
+        self.f_date=QDateEdit(QDate.currentDate())
+        self.f_date.setCalendarPopup(True); self.f_date.setDisplayFormat("yyyy-MM-dd")
+        dr.addWidget(self.f_date); fl.addLayout(dr)
+        self.f_cat=QComboBox(); self._update_cats(); fl.addWidget(self.f_cat)
+        self.f_amt=QLineEdit(); self.f_amt.setPlaceholderText("Сумма"); fl.addWidget(self.f_amt)
+        self.f_com=QLineEdit(); self.f_com.setPlaceholderText("Комментарий"); fl.addWidget(self.f_com)
+        sb=QPushButton("💾 Сохранить в CSV"); sb.clicked.connect(self._add_row); fl.addWidget(sb)
+        fl.addStretch(); lay.addWidget(form)
 
-        self.f_cat = ctk.CTkOptionMenu(form,
-                                       values=["Продукты", "Транспорт", "Жилье", "Здоровье", "Развлечения", "Зарплата"])
-        self.f_cat.pack(fill=tk.X, padx=15, pady=5)
+        tf=QFrame(); tf.setObjectName("card")
+        tfl=QVBoxLayout(tf); tfl.setContentsMargins(0,0,0,0)
+        bar=QWidget(); bl=QHBoxLayout(bar); bl.setContentsMargins(8,6,8,4); bl.setSpacing(8)
+        db=QPushButton("🗑 Удалить выбранную строку"); db.setObjectName("red")
+        db.setFixedHeight(30); db.clicked.connect(self._del_row); bl.addWidget(db)
+        bl.addStretch()
+        hint=QLabel("Выберите строку и нажмите Удалить")
+        hint.setStyleSheet(f"color:{self.theme['text_dim']};font-size:11px;")
+        bl.addWidget(hint); tfl.addWidget(bar)
 
-        self.f_amt = ctk.CTkEntry(form, placeholder_text="Сумма")
-        self.f_amt.pack(fill=tk.X, padx=15, pady=5)
+        self.fin_tbl=QTableWidget()
+        self.fin_tbl.setColumnCount(5)
+        self.fin_tbl.setHorizontalHeaderLabels(["Дата","Тип","Категория","Сумма","Комментарий"])
+        self.fin_tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.fin_tbl.setAlternatingRowColors(True)
+        self.fin_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.fin_tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.fin_tbl.verticalHeader().setVisible(False)
+        tfl.addWidget(self.fin_tbl); lay.addWidget(tf,stretch=2)
 
-        self.f_comm = ctk.CTkEntry(form, placeholder_text="Комментарий")
-        self.f_comm.pack(fill=tk.X, padx=15, pady=5)
+        charts=QWidget(); cl=QVBoxLayout(charts); cl.setContentsMargins(0,0,0,0); cl.setSpacing(8)
+        cf1=QFrame(); cf1.setObjectName("card"); cfl1=QVBoxLayout(cf1); cfl1.setContentsMargins(6,6,6,6)
+        self.pie_exp=PieWidget("Расход"); cfl1.addWidget(self.pie_exp); cl.addWidget(cf1,stretch=1)
+        cf2=QFrame(); cf2.setObjectName("card"); cfl2=QVBoxLayout(cf2); cfl2.setContentsMargins(6,6,6,6)
+        self.pie_inc=PieWidget("Доход");  cfl2.addWidget(self.pie_inc); cl.addWidget(cf2,stretch=1)
+        lay.addWidget(charts,stretch=1)
 
-        ctk.CTkButton(form, text="Сохранить в CSV", command=self._add_finance_to_csv).pack(fill=tk.X, padx=15, pady=20)
+    def _update_cats(self):
+        self.f_cat.clear()
+        self.f_cat.addItems(CATS_INC if self.f_type.currentText()=="Доход" else CATS_EXP)
 
-        table_fr = ctk.CTkFrame(tab)
-        table_fr.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+    def _open_csv(self):
+        p,_=QFileDialog.getOpenFileName(self,"Открыть CSV","","CSV (*.csv)")
+        if p: self.csv_path=p; self.lbl_file.setText(os.path.basename(p)); self._reload()
 
-        cols = ("Date", "Type", "Category", "Amount", "Comment")
-        self.tree = ttk.Treeview(table_fr, columns=cols, show="headings")
-        for col in cols:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=100)
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    def _create_csv(self):
+        p,_=QFileDialog.getSaveFileName(self,"Создать CSV","","CSV (*.csv)")
+        if p:
+            pd.DataFrame(columns=["Date","Type","Category","Amount","Comment"])\
+              .to_csv(p,index=False,encoding="utf-8-sig")
+            self.csv_path=p; self.lbl_file.setText(os.path.basename(p)); self._reload()
 
-    def _add_finance_to_csv(self):
-        if not self.current_csv_path:
-            messagebox.showwarning("Внимание", "Сначала выберите или создайте CSV файл!")
-            return
+    def _reload(self):
+        if not self.csv_path: return
+        for enc in ["utf-8-sig","utf-8","cp1251","latin1"]:
+            try:
+                df=pd.read_csv(self.csv_path,encoding=enc,sep=None,engine="python",dtype=str)
+                if len(df.columns)>=2: self.df=df; break
+            except: continue
+        cm={}
+        for c in self.df.columns:
+            lo=c.strip().lower()
+            if lo in("date","дата"):cm[c]="Date"
+            elif lo in("type","тип"):cm[c]="Type"
+            elif lo in("category","категория"):cm[c]="Category"
+            elif lo in("amount","сумма","sum"):cm[c]="Amount"
+            elif lo in("comment","комментарий"):cm[c]="Comment"
+        self.df.rename(columns=cm,inplace=True)
+        for c in["Date","Type","Category","Amount","Comment"]:
+            if c not in self.df.columns: self.df[c]=""
+        self._refresh_tbl(); self._refresh_charts()
 
-        try:
-            amt = float(self.f_amt.get())
-            row = [self.f_date.get(), self.f_type.get(), self.f_cat.get(), amt, self.f_comm.get()]
-            with open(self.current_csv_path, "a", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(row)
+    def _refresh_tbl(self):
+        t=self.theme; self.fin_tbl.setRowCount(0)
+        for _,row in self.df.iterrows():
+            r=self.fin_tbl.rowCount(); self.fin_tbl.insertRow(r)
+            for ci,key in enumerate(["Date","Type","Category","Amount","Comment"]):
+                val=str(row.get(key,"")) if pd.notna(row.get(key,"")) else ""
+                item=QTableWidgetItem(val)
+                if key=="Type":
+                    item.setForeground(QColor(t["negative"]) if "расход" in val.lower()
+                                       else QColor(t["positive"]) if "доход" in val.lower()
+                                       else QColor(t["text"]))
+                else: item.setForeground(QColor(t["text"]))
+                self.fin_tbl.setItem(r,ci,item)
 
-            self._refresh_table_from_csv()
-            self.f_amt.delete(0, 'end');
-            self.f_comm.delete(0, 'end')
-        except ValueError:
-            messagebox.showerror("Ошибка", "Сумма должна быть числом!")
+    def _refresh_charts(self):
+        self.pie_exp.plot(self.df,self.theme)
+        self.pie_inc.plot(self.df,self.theme)
 
-    # --- ВКЛАДКА ЗАДАЧИ ---
-    def _init_tasks_tab(self):
-        tab = self.tabs.tab("Задачи")
+    def _add_row(self):
+        if not self.csv_path:
+            QMessageBox.warning(self,"Внимание","Сначала выберите или создайте CSV файл!"); return
+        try: amt=float(self.f_amt.text().replace(",","."))
+        except: QMessageBox.critical(self,"Ошибка","Сумма должна быть числом!"); return
+        nr={"Date":self.f_date.date().toString("yyyy-MM-dd"),"Type":self.f_type.currentText(),
+            "Category":self.f_cat.currentText(),"Amount":amt,"Comment":self.f_com.text()}
+        self.df=pd.concat([self.df,pd.DataFrame([nr])],ignore_index=True)
+        self.df.to_csv(self.csv_path,index=False,encoding="utf-8-sig")
+        self.f_amt.clear(); self.f_com.clear()
+        self._refresh_tbl(); self._refresh_charts()
 
-        input_fr = ctk.CTkFrame(tab)
-        input_fr.pack(fill=tk.X, padx=20, pady=10)
+    def _del_row(self):
+        rows=self.fin_tbl.selectionModel().selectedRows()
+        if not rows: QMessageBox.information(self,"","Выберите строку."); return
+        idx=rows[0].row()
+        msg=QMessageBox(self); msg.setWindowTitle("Подтверждение")
+        msg.setText(f"Удалить строку {idx+1}?"); msg.setIcon(QMessageBox.Icon.Question)
+        yes=msg.addButton("Да",QMessageBox.ButtonRole.YesRole)
+        msg.addButton("Нет",QMessageBox.ButtonRole.NoRole); msg.exec()
+        if msg.clickedButton()==yes:
+            self.df=self.df.drop(index=idx).reset_index(drop=True)
+            if self.csv_path: self.df.to_csv(self.csv_path,index=False,encoding="utf-8-sig")
+            self._refresh_tbl(); self._refresh_charts()
 
-        self.t_name = ctk.CTkEntry(input_fr, placeholder_text="Название задачи...", width=400)
-        self.t_name.pack(side=tk.LEFT, padx=10, pady=10)
+    # ── ЗАДАЧИ ──────────────────────────────────────────────────────────────
+    def _build_tasks(self):
+        tab=QWidget(); self.tabs.addTab(tab,"Задачи")
+        vl=QVBoxLayout(tab); vl.setContentsMargins(12,12,12,12); vl.setSpacing(10)
+        inp=QFrame(); inp.setObjectName("card")
+        il=QHBoxLayout(inp); il.setContentsMargins(12,10,12,10); il.setSpacing(8)
+        self.t_name=QLineEdit(); self.t_name.setPlaceholderText("Название задачи...")
+        self.t_name.setMinimumWidth(340); il.addWidget(self.t_name)
+        self.t_rew=QLineEdit(); self.t_rew.setPlaceholderText(f"Награда (макс.{MAX_REWARD})")
+        self.t_rew.setFixedWidth(160); il.addWidget(self.t_rew)
+        ab=QPushButton("＋ Добавить"); ab.clicked.connect(self._add_task)
+        self.t_name.returnPressed.connect(self._add_task); il.addWidget(ab); il.addStretch()
+        vl.addWidget(inp)
+        lim=QLabel(f"Максимальная награда: {MAX_REWARD} тугриков")
+        lim.setStyleSheet("color:#999;font-size:11px;"); vl.addWidget(lim)
+        cols=QHBoxLayout(); cols.setSpacing(12)
+        self.a_col,self.a_lay=self._task_col("🔥 Активные задачи")
+        self.d_col,self.d_lay=self._task_col("✅ Выполненные")
+        cols.addWidget(self.a_col); cols.addWidget(self.d_col); vl.addLayout(cols)
+        self._refresh_tasks()
 
-        self.t_rew = ctk.CTkEntry(input_fr, placeholder_text="Награда", width=80)
-        self.t_rew.pack(side=tk.LEFT, padx=5, pady=10)
-
-        ctk.CTkButton(input_fr, text="Добавить", width=100, command=self._add_task).pack(side=tk.LEFT, padx=10)
-
-        # Контейнер для двух списков (Активные и Выполненные)
-        lists_fr = ctk.CTkFrame(tab, fg_color="transparent")
-        lists_fr.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
-
-        self.tasks_active_container = ctk.CTkScrollableFrame(lists_fr, label_text="🔥 Активные задачи")
-        self.tasks_active_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
-
-        self.tasks_done_container = ctk.CTkScrollableFrame(lists_fr, label_text="✅ Выполненные")
-        self.tasks_done_container.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(10, 0))
-
-        self._refresh_task_list()
+    def _task_col(self,title):
+        outer=QFrame(); outer.setObjectName("col_f")
+        ol=QVBoxLayout(outer); ol.setContentsMargins(0,0,0,0); ol.setSpacing(0)
+        hdr=QLabel(title); hdr.setStyleSheet("font-size:13px;font-weight:700;padding:11px 14px;background:transparent;")
+        ol.addWidget(hdr)
+        sep=QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background:{self.theme['border']};max-height:1px;border:none;"); ol.addWidget(sep)
+        scroll=QScrollArea(); scroll.setWidgetResizable(True)
+        inner=QWidget(); inner.setStyleSheet("background:transparent;")
+        lay=QVBoxLayout(inner); lay.setContentsMargins(8,8,8,8); lay.setSpacing(5); lay.addStretch()
+        scroll.setWidget(inner); ol.addWidget(scroll)
+        return outer,lay
 
     def _add_task(self):
-        name = self.t_name.get().strip()
+        name=self.t_name.text().strip()
         try:
-            rew = int(self.t_rew.get())
+            rew=int(self.t_rew.text())
             if not name: raise ValueError
-            self.tasks.append({"title": name, "reward": rew, "done": False})
-            self._save_internal_data()
-            self._refresh_task_list()
-            self.t_name.delete(0, 'end');
-            self.t_rew.delete(0, 'end')
-        except:
-            messagebox.showerror("Ошибка", "Заполните название и награду (число)")
-
-    def _refresh_task_list(self):
-        # Очищаем оба списка
-        for w in self.tasks_active_container.winfo_children(): w.destroy()
-        for w in self.tasks_done_container.winfo_children(): w.destroy()
-
-        for i, t in enumerate(self.tasks):
-            if not t.get("done"):
-                # Активная задача
-                f = ctk.CTkFrame(self.tasks_active_container)
-                f.pack(fill=tk.X, pady=3, padx=5)
-                ctk.CTkLabel(f, text=f"🎯 {t['title']}").pack(side=tk.LEFT, padx=15)
-                ctk.CTkLabel(f, text=f"+{t['reward']} 💰", text_color="#facc15").pack(side=tk.LEFT)
-                ctk.CTkButton(f, text="Выполнено", width=80, fg_color="#10b981", hover_color="#059669",
-                              command=lambda idx=i: self._complete_task(idx)).pack(side=tk.RIGHT, padx=5)
-            else:
-                # Выполненная задача
-                f = ctk.CTkFrame(self.tasks_done_container, fg_color="#1f2937")
-                f.pack(fill=tk.X, pady=3, padx=5)
-                ctk.CTkLabel(f, text=f"<s>{t['title']}</s>", text_color="#9ca3af").pack(side=tk.LEFT, padx=15)
-                ctk.CTkLabel(f, text=f"Получено: {t['reward']} 💰", text_color="#6ee7b7").pack(side=tk.RIGHT, padx=15)
-
-    def _complete_task(self, idx):
-        self.tugriki += self.tasks[idx]["reward"]
-        self.tasks[idx]["done"] = True
-        self.tugriki_var.set(f"Тугрики: {self.tugriki} 💰")
-        self._save_internal_data()
-        self._refresh_task_list()
-
-    # --- ВКЛАДКА МАГАЗИН ---
-    def _init_shop_tab(self):
-        tab = self.tabs.tab("Магазин")
-
-        shop_tabs = ctk.CTkTabview(tab)
-        shop_tabs.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        t_store = shop_tabs.add("Витрина")
-        t_inventory = shop_tabs.add("Приобретённое")
-
-        # --- Витрина ---
-        grid = ctk.CTkScrollableFrame(t_store, fg_color="transparent")
-        grid.pack(fill=tk.BOTH, expand=True)
-
-        # Центрируем колонки с карточками
-        num_cols = 3
-        for c in range(num_cols):
-            grid.grid_columnconfigure(c, weight=1)
-
-        for i, item in enumerate(self.shop_items):
-            card = ctk.CTkFrame(grid, width=220, height=250)
-            card.grid(row=i // 3, column=i % 3, padx=15, pady=15)
-            card.grid_propagate(False)
-
-            # Картинка
-            img = self._get_shop_image(item["name"])
-            ctk.CTkLabel(card, text="", image=img).pack(pady=(15, 5))
-
-            ctk.CTkLabel(card, text=item["name"], font=("Roboto", 15, "bold")).pack()
-            ctk.CTkLabel(card, text=f"{item['price']} 💰", text_color="#facc15", font=("Roboto", 14)).pack()
-
-            ctk.CTkButton(card, text="Купить", width=120,
-                          command=lambda it=item: self._buy_reward(it)).pack(side=tk.BOTTOM, pady=15)
-
-        # --- Инвентарь ---
-        self.inventory_container = ctk.CTkScrollableFrame(t_inventory, fg_color="transparent")
-        self.inventory_container.pack(fill=tk.BOTH, expand=True)
-        self._refresh_inventory()
-
-    def _buy_reward(self, item):
-        if self.tugriki >= item["price"]:
-            self.tugriki -= item["price"]
-            self.purchased_items.append(item["name"])  # Добавляем в инвентарь
-            self.tugriki_var.set(f"Тугрики: {self.tugriki} 💰")
-            self._save_internal_data()
-            self._refresh_inventory()
-            messagebox.showinfo("Поздравляем!", f"Вы приобрели: {item['name']}")
-        else:
-            messagebox.showwarning("Эх...", "Недостаточно тугриков. Время поработать!")
-
-    def _refresh_inventory(self):
-        for w in self.inventory_container.winfo_children(): w.destroy()
-
-        if not self.purchased_items:
-            ctk.CTkLabel(self.inventory_container, text="Вы пока ничего не купили 😢", text_color="#9ca3af",
-                         font=("Roboto", 16)).pack(pady=50)
-            return
-
-        for i, item_name in enumerate(reversed(self.purchased_items)):  # Показываем новые сверху
-            card = ctk.CTkFrame(self.inventory_container, width=150, height=180)
-            card.grid(row=i // 4, column=i % 4, padx=15, pady=15)
-            card.grid_propagate(False)
-
-            img = self._get_shop_image(item_name)
-            ctk.CTkLabel(card, text="", image=img).pack(pady=(15, 5))
-            ctk.CTkLabel(card, text=item_name, font=("Roboto", 13, "bold")).pack()
-            ctk.CTkLabel(card, text="Куплено ✔️", text_color="#10b981").pack(side=tk.BOTTOM, pady=10)
-
-        # --- ВКЛАДКА КУБИК ---
-    def _init_dice_tab(self):
-        tab = self.tabs.tab("Кубик")
-
-        center_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        center_frame.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-
-        ctk.CTkLabel(center_frame, text="🎲 Рандомайзер", font=("Roboto", 24, "bold")).pack(pady=(0, 15))
-
-        # Диапазон
-        input_f = ctk.CTkFrame(center_frame, fg_color="transparent")
-        input_f.pack()
-
-        ctk.CTkLabel(input_f, text="От:").grid(row=0, column=0, padx=5)
-        self.d_min = ctk.CTkEntry(input_f, width=60)
-        self.d_min.insert(0, "1")
-        self.d_min.grid(row=0, column=1)
-
-        ctk.CTkLabel(input_f, text="До:").grid(row=0, column=2, padx=5)
-        self.d_max = ctk.CTkEntry(input_f, width=60)
-        self.d_max.insert(0, "10")
-        self.d_max.grid(row=0, column=3)
-
-        # Исключения
-        excl_f = ctk.CTkFrame(center_frame, fg_color="transparent")
-        excl_f.pack(pady=(10, 0))
-        ctk.CTkLabel(excl_f, text="Исключить числа:", font=("Roboto", 13)).pack(side=tk.LEFT, padx=(0, 8))
-        self.d_excl = ctk.CTkEntry(excl_f, width=140, placeholder_text="напр: 3, 7, 9")
-        self.d_excl.pack(side=tk.LEFT)
-        ctk.CTkButton(excl_f, text="+ Добавить", width=90, height=28,
-                      command=self._add_excl_tag).pack(side=tk.LEFT, padx=(8, 0))
-
-        # Теги исключённых чисел
-        self.excl_tags_frame = ctk.CTkFrame(center_frame, fg_color="transparent")
-        self.excl_tags_frame.pack(pady=(6, 0))
-
-        app_bg = "#1a1a1a"
-        self.dice_label = ctk.CTkLabel(center_frame, text="")
-        self.dice_label.pack(pady=18)
-        self._draw_dice_face("?", color="#6366f1")
-
-        self.btn_roll = ctk.CTkButton(center_frame, text="🎲 Бросить кубик", font=("Roboto", 18), height=44,
-                                      command=self._start_roll_animation)
-        self.btn_roll.pack()
-
-        self.excluded_numbers = []
-
-    def _add_excl_tag(self):
-        raw = self.d_excl.get().strip()
-        if not raw:
-            return
-        for part in raw.replace(";", ",").split(","):
-            part = part.strip()
-            try:
-                n = int(part)
-                if n not in self.excluded_numbers:
-                    self.excluded_numbers.append(n)
-            except ValueError:
-                pass
-        self.d_excl.delete(0, "end")
-        self._refresh_excl_tags()
-
-    def _refresh_excl_tags(self):
-        for w in self.excl_tags_frame.winfo_children():
-            w.destroy()
-        for n in self.excluded_numbers:
-            tag_f = ctk.CTkFrame(self.excl_tags_frame, fg_color="#3b1f6b", corner_radius=12)
-            tag_f.pack(side=tk.LEFT, padx=3, pady=2)
-            ctk.CTkLabel(tag_f, text=str(n), font=("Roboto", 12, "bold"),
-                         text_color="#c4b5fd").pack(side=tk.LEFT, padx=(8, 2), pady=2)
-            ctk.CTkButton(tag_f, text="✕", width=20, height=20, font=("Roboto", 10),
-                          fg_color="transparent", hover_color="#6d28d9",
-                          command=lambda num=n: self._remove_excl_tag(num)).pack(side=tk.LEFT, padx=(0, 4))
-
-    def _remove_excl_tag(self, n):
-        if n in self.excluded_numbers:
-            self.excluded_numbers.remove(n)
-        self._refresh_excl_tags()
-
-    def _draw_dice_face(self, value, color="#6366f1", scale=1.0):
-        from PIL import Image, ImageDraw, ImageFont
-        import math
-
-        size = 160
-        img = Image.new("RGBA", (size, size), (0, 0, 0, 0))  # прозрачный фон
-        draw = ImageDraw.Draw(img)
-
-        cx, cy = size // 2, size // 2
-        half = int(60 * scale)
-        r = int(half * 0.30)
-        x0, y0, x1, y1 = cx - half, cy - half, cx + half, cy + half
-
-        # Цвет кубика
-        def hex_to_rgba(h, a=255):
-            h = h.lstrip("#")
-            return tuple(int(h[i:i+2], 16) for i in (0, 2, 4)) + (a,)
-
-        dice_fill = hex_to_rgba("#2d2b55")
-        border_col = hex_to_rgba(color)
-        shadow_col = (0, 0, 0, 120)
-        text_col = hex_to_rgba(color)
-
-        # Тень (скруглённый прямоугольник, смещение)
-        so = 6
-        draw.rounded_rectangle([x0 + so, y0 + so, x1 + so, y1 + so], radius=r, fill=shadow_col)
-
-        # Основной кубик
-        draw.rounded_rectangle([x0, y0, x1, y1], radius=r, fill=dice_fill, outline=border_col, width=3)
-
-        # Число по центру
-        fsize = max(10, int(48 * scale))
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fsize)
-        except:
-            font = ImageFont.load_default()
-
-        txt = str(value)
-        bbox = draw.textbbox((0, 0), txt, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        draw.text((cx - tw // 2, cy - th // 2 - 2), txt, font=font, fill=text_col)
-
-        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
-        self.dice_label.configure(image=ctk_img)
-        self.dice_label._image = ctk_img  # защита от GC
-
-    def _start_roll_animation(self):
-        try:
-            a, b = int(self.d_min.get()), int(self.d_max.get())
-            if a > b: a, b = b, a
-
-            available = [n for n in range(a, b + 1) if n not in self.excluded_numbers]
-            if not available:
-                messagebox.showwarning("Ошибка", "Все числа в диапазоне исключены!")
-                return
-
-            self.btn_roll.configure(state="disabled")
-            self._animate_roll(available, frames_left=22, delay=30)
+            if rew<=0 or rew>MAX_REWARD:
+                QMessageBox.warning(self,"",f"Награда от 1 до {MAX_REWARD}."); return
         except ValueError:
-            messagebox.showerror("Ошибка", "Введите целые числа")
+            QMessageBox.critical(self,"Ошибка","Заполните название и награду (целое число)."); return
+        self.state["tasks"].append({"title":name,"reward":rew,"done":False})
+        self._save(); self._refresh_tasks()
+        self.t_name.clear(); self.t_rew.clear()
 
-    def _animate_roll(self, available, frames_left, delay):
-        if frames_left > 0:
-            import math
-            total = 22
-            progress = (total - frames_left) / total
-            scale = 1.0 + 0.12 * math.sin(progress * math.pi)
-            colors = ["#6366f1", "#818cf8", "#a78bfa", "#7c3aed"]
-            color = colors[frames_left % len(colors)]
-            num = random.choice(available)
-            self._draw_dice_face(num, color=color, scale=scale)
-            new_delay = delay + int(170 / (frames_left + 1))
-            self.after(new_delay, self._animate_roll, available, frames_left - 1, new_delay)
-        else:
-            final_res = random.choice(available)
-            self._bounce_animation(final_res)
-
-    def _bounce_animation(self, value):
-        scales = [1.28, 0.90, 1.10, 0.97, 1.0]
-        colors = ["#10b981", "#34d399", "#10b981", "#059669", "#10b981"]
-
-        def do_bounce(idx):
-            if idx < len(scales):
-                self._draw_dice_face(value, color=colors[idx], scale=scales[idx])
-                self.after(65, do_bounce, idx + 1)
+    def _refresh_tasks(self):
+        for lay in[self.a_lay,self.d_lay]:
+            while lay.count()>1:
+                item=lay.takeAt(0)
+                if item.widget(): item.widget().deleteLater()
+        for i,t in enumerate(self.state["tasks"]):
+            card=QFrame(); cl=QHBoxLayout(card); cl.setContentsMargins(10,6,10,6); cl.setSpacing(8)
+            if not t.get("done"):
+                card.setObjectName("task_a")
+                lbl=QLabel(t["title"]); lbl.setStyleSheet("font-size:13px;")
+                rew=QLabel(f"+{t['reward']} 💰")
+                rew.setStyleSheet(f"color:{self.theme['positive']};font-weight:700;font-size:12px;")
+                rew.setFixedWidth(60); rew.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+                btn=QPushButton("✔ Выполнено")
+                btn.setStyleSheet(
+                    f"QPushButton{{background:{self.theme['positive']};color:white;border:none;"
+                    f"border-radius:6px;font-size:12px;font-weight:600;padding:3px 8px;}}"
+                    f"QPushButton:hover{{background:{self.theme['positive']}cc;}}")
+                btn.setFixedWidth(105); btn.setFixedHeight(28)
+                btn.clicked.connect(lambda _,idx=i: self._complete(idx))
+                cl.addWidget(lbl,stretch=1); cl.addWidget(rew); cl.addWidget(btn)
+                self.a_lay.insertWidget(self.a_lay.count()-1,card)
             else:
-                self._draw_dice_face(value, color="#10b981", scale=1.0)
-                self.btn_roll.configure(state="normal")
-                self.after(2200, lambda: self._draw_dice_face(value, color="#6366f1", scale=1.0))
+                card.setObjectName("task_d")
+                lbl=QLabel(t["title"])
+                lbl.setStyleSheet(f"font-size:13px;color:{self.theme['text_dim']};text-decoration:line-through;")
+                rew=QLabel(f"+{t['reward']} 💰")
+                rew.setStyleSheet(f"color:{self.theme['positive']};font-weight:700;font-size:12px;")
+                rew.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+                cl.addWidget(lbl,stretch=1); cl.addWidget(rew)
+                self.d_lay.insertWidget(self.d_lay.count()-1,card)
 
-        do_bounce(0)
+    def _complete(self,idx):
+        self.state["tugriki"]+=self.state["tasks"][idx]["reward"]
+        self.state["tasks"][idx]["done"]=True
+        self._save(); self._update_tug(); self._refresh_tasks()
+
+    # ── МАГАЗИН ─────────────────────────────────────────────────────────────
+    def _build_shop(self):
+        tab=QWidget(); self.tabs.addTab(tab,"Магазин")
+        vl=QVBoxLayout(tab); vl.setContentsMargins(12,12,12,12)
+        it=QTabWidget(); vl.addWidget(it)
+        sw=QWidget(); self._build_store(sw); it.addTab(sw,"Витрина")
+        self.inv_w=QWidget(); it.addTab(self.inv_w,"Приобретённое")
+        self._refresh_inv()
+
+    def _build_store(self,parent):
+        scroll=QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        inner=QWidget(); inner.setStyleSheet("background:transparent;")
+        grid=QGridLayout(inner); grid.setContentsMargins(24,24,24,24); grid.setSpacing(20)
+        for i,item in enumerate(self.SHOP):
+            card=QFrame(); card.setObjectName("card"); card.setFixedSize(222,258)
+            vl2=QVBoxLayout(card); vl2.setContentsMargins(12,14,12,14)
+            vl2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            img_lbl=QLabel(); img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pix=self._get_pix(item["name"])
+            img_lbl.setPixmap(pix.scaled(110,110,Qt.AspectRatioMode.KeepAspectRatio,
+                                          Qt.TransformationMode.SmoothTransformation))
+            vl2.addWidget(img_lbl)
+            nl=QLabel(item["name"]); nl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            nl.setStyleSheet("font-size:14px;font-weight:700;"); vl2.addWidget(nl)
+            pl=QLabel(f"{item['price']} Тугриков"); pl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pl.setStyleSheet(f"color:{self.theme['positive']};font-size:12px;font-weight:600;")
+            vl2.addWidget(pl)
+            btn=QPushButton("🛒  Купить"); btn.setFixedWidth(140); btn.setFixedHeight(36)
+            btn.setStyleSheet(
+                f"QPushButton{{background:{self.theme['positive']};color:white;border:none;"
+                f"border-radius:8px;font-size:13px;font-weight:700;padding:6px 14px;}}"
+                f"QPushButton:hover{{background:{self.theme['positive']}dd;}}")
+            btn.clicked.connect(lambda _,it=item: self._buy(it))
+            vl2.addWidget(btn,alignment=Qt.AlignmentFlag.AlignCenter)
+            grid.addWidget(card,i//3,i%3)
+        for c in range(3): grid.setColumnStretch(c,1)
+        scroll.setWidget(inner)
+        pl=QVBoxLayout(parent); pl.setContentsMargins(0,0,0,0); pl.addWidget(scroll)
+
+    def _get_pix(self,name):
+        if name in self.image_cache: return self.image_cache[name]
+        path=os.path.join(IMAGES_DIR,f"{name}.png")
+        if os.path.exists(path): pix=QPixmap(path)
+        else:
+            r,g,b=random.randint(60,120),random.randint(60,120),random.randint(80,160)
+            pix=QPixmap(120,120); pix.fill(QColor(r,g,b))
+            p=QPainter(pix); p.setPen(QColor("white"))
+            p.setFont(QFont("Arial",38,QFont.Weight.Bold))
+            p.drawText(pix.rect(),Qt.AlignmentFlag.AlignCenter,name[0].upper()); p.end()
+        self.image_cache[name]=pix; return pix
+
+    def _buy(self,item):
+        if self.state["tugriki"]>=item["price"]:
+            self.state["tugriki"]-=item["price"]
+            self.state["purchased"].append(item["name"])
+            self._save(); self._update_tug(); self._refresh_inv()
+            QMessageBox.information(self,"🎉 Куплено!",f"Вы приобрели: {item['name']}")
+        else:
+            QMessageBox.warning(self,"","Недостаточно тугриков!")
+
+    def _refresh_inv(self):
+        old=self.inv_w.layout()
+        if old:
+            while old.count():
+                w=old.takeAt(0)
+                if w.widget(): w.widget().deleteLater()
+            old.deleteLater()
+        scroll=QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        inner=QWidget(); inner.setStyleSheet("background:transparent;")
+        outer_lay=QVBoxLayout(inner); outer_lay.setContentsMargins(20,20,20,20)
+        outer_lay.setAlignment(Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignHCenter)
+        grid_w=QWidget(); grid_w.setStyleSheet("background:transparent;")
+        grid=QGridLayout(grid_w); grid.setContentsMargins(0,0,0,0); grid.setSpacing(16)
+        if not self.state["purchased"]:
+            el=QLabel("Вы ещё ничего не купили 😢")
+            el.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            el.setStyleSheet(f"color:{self.theme['text_dim']};font-size:16px;")
+            grid.addWidget(el,0,0,1,4)
+        else:
+            for i,name in enumerate(reversed(self.state["purchased"])):
+                card=QFrame(); card.setObjectName("card"); card.setFixedSize(160,185)
+                vl2=QVBoxLayout(card); vl2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img=QLabel(); img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                pix=self._get_pix(name)
+                img.setPixmap(pix.scaled(90,90,Qt.AspectRatioMode.KeepAspectRatio,
+                                          Qt.TransformationMode.SmoothTransformation))
+                vl2.addWidget(img)
+                nl=QLabel(name); nl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                nl.setStyleSheet("font-weight:700;font-size:13px;"); vl2.addWidget(nl)
+                bl=QLabel("Куплено ✓"); bl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                bl.setStyleSheet(f"color:{self.theme['positive']};font-size:12px;font-weight:600;")
+                vl2.addWidget(bl); grid.addWidget(card,i//4,i%4)
+        outer_lay.addWidget(grid_w); scroll.setWidget(inner)
+        pl=QVBoxLayout(self.inv_w); pl.setContentsMargins(0,0,0,0); pl.addWidget(scroll)
+
+    # ── КУБИК ───────────────────────────────────────────────────────────────
+    def _build_dice(self):
+        tab=QWidget(); self.tabs.addTab(tab,"Кубик")
+        outer=QVBoxLayout(tab); outer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wrap=QFrame(); wrap.setObjectName("card"); wrap.setFixedWidth(520)
+        vl=QVBoxLayout(wrap); vl.setContentsMargins(30,28,30,28); vl.setSpacing(12)
+        vl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ttl=QLabel("🎲 Рандомайзер"); ttl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ttl.setStyleSheet("font-size:22px;font-weight:800;"); vl.addWidget(ttl)
+        sub=QLabel("Бросьте кубик и получите случайное число")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet(f"color:{self.theme['text_dim']};font-size:12px;"); vl.addWidget(sub)
+
+        rr=QHBoxLayout(); rr.setAlignment(Qt.AlignmentFlag.AlignCenter); rr.setSpacing(6)
+        rr.addWidget(QLabel("От:"))
+        self.d_min=QLineEdit("1"); self.d_min.setFixedWidth(60); rr.addWidget(self.d_min)
+        rr.addSpacing(12); rr.addWidget(QLabel("До:"))
+        self.d_max=QLineEdit("10"); self.d_max.setFixedWidth(60); rr.addWidget(self.d_max)
+        hint=QLabel("(макс. 128)"); hint.setStyleSheet(f"color:{self.theme['text_dim']};font-size:11px;")
+        rr.addSpacing(6); rr.addWidget(hint); vl.addLayout(rr)
+
+        er=QHBoxLayout(); er.setAlignment(Qt.AlignmentFlag.AlignCenter); er.setSpacing(6)
+        er.addWidget(QLabel("Исключить:"))
+        self.d_excl=QLineEdit(); self.d_excl.setPlaceholderText("напр: 3, 7, 9")
+        self.d_excl.setFixedWidth(140); self.d_excl.returnPressed.connect(self._add_excl)
+        er.addWidget(self.d_excl)
+        eb=QPushButton("Добавить"); eb.setFixedWidth(90); eb.clicked.connect(self._add_excl)
+        er.addWidget(eb); vl.addLayout(er)
+
+        self.tags_w=QWidget(); self.tags_lay=QHBoxLayout(self.tags_w)
+        self.tags_lay.setContentsMargins(0,0,0,0); self.tags_lay.setSpacing(5)
+        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter); vl.addWidget(self.tags_w)
+
+        self.dice=DiceWidget(); self.dice.update_theme(self.theme)
+        vl.addWidget(self.dice,alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.res_lbl=QLabel(""); self.res_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.res_lbl.setStyleSheet(f"font-size:13px;color:{self.theme['text_dim']};"); vl.addWidget(self.res_lbl)
+
+        self.roll_btn=QPushButton("🎲 Бросить кубик"); self.roll_btn.setFixedWidth(210)
+        self.roll_btn.setFixedHeight(44)
+        self.roll_btn.setStyleSheet("font-size:15px;font-weight:700;border-radius:8px;")
+        self.roll_btn.clicked.connect(self._start_roll); vl.addWidget(self.roll_btn,alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(wrap)
+
+    def _add_excl(self):
+        for p in self.d_excl.text().replace(";",",").split(","):
+            try:
+                n=int(p.strip())
+                if n not in self.excl: self.excl.append(n)
+            except: pass
+        self.d_excl.clear(); self._refresh_tags()
+
+    def _refresh_tags(self):
+        while self.tags_lay.count():
+            item=self.tags_lay.takeAt(0)
+            if item.widget(): item.widget().deleteLater()
+        for n in self.excl:
+            tag=ExclTag(n,self.theme["accent"]); tag.removed.connect(self._rm_excl)
+            self.tags_lay.addWidget(tag)
+
+    def _rm_excl(self,n):
+        if n in self.excl: self.excl.remove(n)
+        self._refresh_tags()
+
+    def _start_roll(self):
+        try:
+            a=int(self.d_min.text()); b=min(int(self.d_max.text()),128)
+            self.d_max.setText(str(b))
+            if a>b: a,b=b,a
+            avail=[n for n in range(a,b+1) if n not in self.excl]
+            if not avail: QMessageBox.warning(self,"","Все числа исключены!"); return
+            self._dice_avail=avail; self._dice_frames=22; self._dice_delay=30
+            self.roll_btn.setEnabled(False); self.res_lbl.setText("")
+            self._dice_timer.start(self._dice_delay)
+        except: QMessageBox.critical(self,"Ошибка","Введите целые числа")
+
+    def _dice_tick(self):
+        if self._dice_frames>0:
+            prog=(22-self._dice_frames)/22; scale=1.0+0.11*math.sin(prog*math.pi)
+            cols=[self.theme["accent"],"#7090d8","#8a70c8","#6080b8"]
+            self.dice.set_face(random.choice(self._dice_avail),cols[self._dice_frames%4],scale)
+            self._dice_frames-=1; self._dice_delay+=int(170/(self._dice_frames+2))
+            self._dice_timer.setInterval(self._dice_delay)
+        else:
+            self._dice_timer.stop(); self._bounce_val=random.choice(self._dice_avail)
+            self._bounce_step=0; self._do_bounce()
+
+    def _do_bounce(self):
+        scales=[1.25,0.92,1.10,0.97,1.0]
+        cols=[self.theme["positive"],"#5dcc8a",self.theme["positive"],"#3a9e6a",self.theme["positive"]]
+        if self._bounce_step<len(scales):
+            self.dice.set_face(self._bounce_val,cols[self._bounce_step],scales[self._bounce_step])
+            self._bounce_step+=1; QTimer.singleShot(65,self._do_bounce)
+        else:
+            self.dice.set_face(self._bounce_val,self.theme["positive"],1.0)
+            self.res_lbl.setText(f"Выпало: {self._bounce_val}  |  диапазон {self.d_min.text()}–{self.d_max.text()}")
+            self.roll_btn.setEnabled(True)
+            QTimer.singleShot(2500,lambda: self.dice.set_face(self._bounce_val,self.theme["accent"],1.0))
 
 
-if __name__ == "__main__":
-    app = FinanceApp()
-    app.mainloop()
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE,"r",encoding="utf-8") as f: return json.load(f)
+        except: pass
+    return {"tasks":[],"tugriki":0,"purchased":[]}
+
+
+if __name__=="__main__":
+    app=QApplication(sys.argv); app.setStyle("Fusion")
+    w=App(); w.show(); sys.exit(app.exec())
