@@ -41,14 +41,7 @@
     python main.py
     ```
 
-## 🤝 Вклад
-
-Мы приветствуем любой вклад в развитие проекта! Если у вас есть идеи, предложения или вы хотите сообщить об ошибке, пожалуйста, создайте [Issue](https://github.com/MrBombastick08/Graduation-thesis/issues) или отправьте [Pull Request](https://github.com/MrBombastick08/Graduation-thesis/pulls).
-
 ## 📄 Лицензия
 
 Этот проект распространяется под лицензией MIT. Подробнее см. файл [LICENSE](LICENSE).
 
-## 📞 Контакты
-
-Если у вас есть вопросы, свяжитесь с нами: [ваш_email@example.com]
