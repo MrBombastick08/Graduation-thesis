@@ -32,7 +32,11 @@ LIGHT = {
     "row_alt":  "#f7f7f7", "select":   "#c5d3ee",
     "dice_bg1": "#f5f5f5", "dice_bg2": "#e8e8e8",
 }
-PIE_COLORS = ["#5b7fc7","#e08040","#4caf7d","#9b59b6","#e74c3c","#1abc9c","#f1c40f","#e67e22"]
+PIE_COLORS = [
+    "#5b7fc7","#e08040","#4caf7d","#9b59b6","#e74c3c",
+    "#1abc9c","#f39c12","#2980b9","#8e44ad","#27ae60",
+    "#c0392b","#16a085"
+]
 CATS_EXP = ["Продукты","Транспорт","Жилье","Здоровье","Развлечения","Досуг","Перевод","Наличка","Прочее"]
 CATS_INC = ["Зарплата","Перевод","Наличка"]
 
@@ -109,9 +113,7 @@ class PieWidget(QWidget):
 
     def plot(self, df, theme):
         self._theme = theme; self._data = []
-        pal = ["#5b7fc7","#e08040","#4caf7d","#9b59b6","#e74c3c","#1abc9c","#f1c40f","#e67e22"] \
-              if self.entry_type=="Расход" else \
-              ["#4caf7d","#2e86ab","#74c69d","#457b9d","#52b788","#a8dadc","#1d3557"]
+        pal = PIE_COLORS
         if not df.empty and "Type" in df.columns and "Amount" in df.columns:
             exp = df[df["Type"].astype(str).str.strip()==self.entry_type].copy()
             exp["Amount"] = pd.to_numeric(exp["Amount"],errors="coerce").fillna(0)
@@ -192,6 +194,9 @@ class App(QMainWindow):
         self.state=load_data()
         self.excl=[]
         self.image_cache={}
+        self._rf_model = None   # обученная модель RF
+        self._rf_le = None      # LabelEncoder для категорий
+        self._rf_features = None  # список признаков
         self._dice_timer=QTimer(); self._dice_timer.timeout.connect(self._dice_tick)
         self._dice_frames=0; self._dice_delay=30; self._dice_avail=[]
         self._bounce_step=0; self._bounce_val=0
@@ -206,6 +211,7 @@ class App(QMainWindow):
 
     def _update_tug(self):
         self.tug_lbl.setText(f"Тугрики: {self.state['tugriki']} 💰")
+        self._refresh_history()
 
     # ── тема ────────────────────────────────────────────────────────────────
     def _apply_theme(self):
@@ -316,7 +322,11 @@ class App(QMainWindow):
         """Обновляет виджеты после применения stylesheet"""
         t = self.theme
         if hasattr(self,"tug_lbl"):
-            self.tug_lbl.setStyleSheet(f"color:{t['positive']};font-size:16px;font-weight:700;background:transparent;")
+            self.tug_lbl.setStyleSheet(
+                f"QPushButton{{color:{t['positive']};font-size:16px;font-weight:700;"
+                f"background:transparent;border:none;padding:0;}}"
+                f"QPushButton:hover{{text-decoration:underline;}}"
+            )
         if hasattr(self,"dice"):
             self.dice.update_theme(t)
         if hasattr(self,"inv_scroll"):
@@ -351,8 +361,16 @@ class App(QMainWindow):
         self.theme_btn=QPushButton("☀️ Светлая"); self.theme_btn.setObjectName("outline")
         self.theme_btn.setFixedWidth(120); self.theme_btn.clicked.connect(self._toggle_theme)
         tl.addWidget(self.theme_btn); tl.addSpacing(14)
-        self.tug_lbl=QLabel(f"Тугрики: {self.state['tugriki']} 💰")
-        self.tug_lbl.setStyleSheet(f"color:{self.theme['positive']};font-size:16px;font-weight:700;background:transparent;")
+
+        # Тугрики — кнопка, при клике открывает историю
+        self.tug_lbl=QPushButton(f"Тугрики: {self.state['tugriki']} 💰")
+        self.tug_lbl.setStyleSheet(
+            f"QPushButton{{color:{self.theme['positive']};font-size:16px;font-weight:700;"
+            f"background:transparent;border:none;padding:0;}}"
+            f"QPushButton:hover{{text-decoration:underline;}}"
+        )
+        self.tug_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tug_lbl.clicked.connect(self._show_history_popup)
         tl.addWidget(self.tug_lbl); root.addWidget(tb)
 
         self.tabs=QTabWidget(); self.tabs.setDocumentMode(False)
@@ -412,6 +430,25 @@ class App(QMainWindow):
         self.sv_income  = _make_stat(bl,"Доходы",  self.theme["positive"])
         self.sv_expense = _make_stat(bl,"Расходы", self.theme["negative"])
         self.sv_balance = _make_stat(bl,"Баланс",  self.theme["accent"])
+
+        # Разделитель + кнопка прогноза
+        sep2=QFrame(); sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet(f"background:{self.theme['border']};max-width:1px;border:none;")
+        bl.addWidget(sep2)
+        forecast_btn=QPushButton("Прогноз на след. месяц")
+        forecast_btn.setFixedHeight(28)
+        forecast_btn.setObjectName("outline")
+        forecast_btn.clicked.connect(self._show_forecast)
+        bl.addWidget(forecast_btn)
+
+        sep3=QFrame(); sep3.setFrameShape(QFrame.Shape.VLine)
+        sep3.setStyleSheet(f"background:{self.theme['border']};max-width:1px;border:none;")
+        bl.addWidget(sep3)
+        ml_btn=QPushButton("Обучить модель (RF)")
+        ml_btn.setFixedHeight(28)
+        ml_btn.setObjectName("outline")
+        ml_btn.clicked.connect(self._train_and_show_ml)
+        bl.addWidget(ml_btn)
         main_lay.addWidget(bar)
 
         # ── Splitter: форма | таблица | графики ───────────────────────────
@@ -752,8 +789,10 @@ class App(QMainWindow):
                 self.d_lay.insertWidget(self.d_lay.count()-1,card)
 
     def _complete(self,idx):
-        self.state["tugriki"]+=self.state["tasks"][idx]["reward"]
-        self.state["tasks"][idx]["done"]=True
+        reward = self.state["tasks"][idx]["reward"]
+        self.state["tugriki"] += reward
+        self.state["tasks"][idx]["done"] = True
+        self._record_history(f'+{reward}', f'Задача: {self.state["tasks"][idx]["title"]}')
         self._save(); self._update_tug(); self._refresh_tasks()
 
     # ── МАГАЗИН ─────────────────────────────────────────────────────────────
@@ -773,6 +812,8 @@ class App(QMainWindow):
         self._inv_scroll_update_bg()
         it.addTab(self.inv_w,"Приобретённое")
         self._refresh_inv()
+
+        self._refresh_history()
 
     def _build_store(self,parent):
         scroll=QScrollArea(); scroll.setWidgetResizable(True)
@@ -817,10 +858,529 @@ class App(QMainWindow):
             p.drawText(pix.rect(),Qt.AlignmentFlag.AlignCenter,name[0].upper()); p.end()
         self.image_cache[name]=pix; return pix
 
+    def _train_and_show_ml(self):
+        """Обучает Random Forest на текущих данных и показывает результаты"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QProgressBar
+        t = self.theme
+
+        df = self.df.copy()
+        if df.empty or len(df) < 20:
+            self._msg(self,"warn","ML","Недостаточно данных (нужно минимум 20 записей)."); return
+        if "Type" not in df.columns or "Amount" not in df.columns:
+            self._msg(self,"warn","ML","Нет нужных столбцов (Type, Amount)."); return
+
+        # ── Подготовка данных ────────────────────────────────────────────
+        try:
+            import numpy as np
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.model_selection import train_test_split
+            from sklearn.preprocessing import LabelEncoder, StandardScaler
+            from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, classification_report
+        except ImportError:
+            self._msg(self,"error","ML","Установите scikit-learn:\npip install scikit-learn numpy"); return
+
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0)
+        df["Date"]   = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["Date","Type"])
+
+        # Признаки
+        df["month"]          = df["Date"].dt.month
+        df["day"]            = df["Date"].dt.day
+        df["weekday"]        = df["Date"].dt.weekday
+        df["is_weekend"]     = (df["weekday"] >= 5).astype(int)
+        df["quarter"]        = df["Date"].dt.quarter
+        df["year"]           = df["Date"].dt.year
+        df["is_month_start"] = (df["day"] <= 5).astype(int)
+        df["is_month_end"]   = (df["day"] >= 25).astype(int)
+        df["log_amount"]     = np.log1p(df["Amount"])
+        df["sqrt_amount"]    = np.sqrt(df["Amount"])
+
+        le = LabelEncoder()
+        df["category_enc"] = le.fit_transform(df["Category"].fillna("Unknown"))
+        df["target"]       = (df["Type"].str.strip() == "Расход").astype(int)
+
+        FEATURES = ["Amount","log_amount","sqrt_amount","month","day","weekday",
+                    "is_weekend","quarter","year","is_month_start","is_month_end","category_enc"]
+        FEAT_NAMES = ["Сумма","Log(Сумма)","√Сумма","Месяц","День","День недели",
+                      "Выходной","Квартал","Год","Нач.мес.","Кон.мес.","Категория"]
+
+        X = df[FEATURES].values
+        y = df["target"].values
+
+        if len(np.unique(y)) < 2:
+            self._msg(self,"warn","ML","Нужны оба типа операций (Расход и Доход)."); return
+
+        # Разбиение
+        test_size = 0.2 if len(X) >= 50 else 0.3
+        X_train,X_test,y_train,y_test = train_test_split(
+            X, y, test_size=test_size, random_state=42, stratify=y)
+
+        # ── Обучение RF ──────────────────────────────────────────────────
+        rf = RandomForestClassifier(
+            n_estimators=200, max_depth=12,
+            min_samples_leaf=2, random_state=42, n_jobs=-1
+        )
+        rf.fit(X_train, y_train)
+        proba  = rf.predict_proba(X_test)[:,1]
+        y_pred = (proba >= 0.5).astype(int)
+
+        roc_auc  = roc_auc_score(y_test, proba)
+        accuracy = accuracy_score(y_test, y_pred)
+        f1       = f1_score(y_test, y_pred)
+
+        # Важность признаков
+        importances = rf.feature_importances_
+        imp_order   = np.argsort(importances)[::-1]
+
+        # Сохраняем модель для использования в прогнозе
+        self._rf_model    = rf
+        self._rf_le       = le
+        self._rf_features = FEATURES
+
+        # ── Окно результатов ─────────────────────────────────────────────
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Random Forest — результаты")
+        dlg.resize(580, 620)
+        dlg.setStyleSheet(f"""
+            QDialog{{background:{t['bg']};}}
+            QLabel{{color:{t['text']};background:transparent;}}
+            QTableWidget{{background:{t['surface']};color:{t['text']};
+                gridline-color:{t['border']};border:none;font-size:12px;
+                alternate-background-color:{t['row_alt']};}}
+            QHeaderView::section{{background:{t['surface2']};color:{t['text']};
+                padding:5px 8px;font-weight:700;font-size:11px;border:none;
+                border-bottom:1px solid {t['border']};}}
+            QTableWidget::item{{padding:3px 8px;}}
+            QFrame#card{{background:{t['surface']};border-radius:8px;border:1px solid {t['border']};}}
+        """)
+        vl = QVBoxLayout(dlg); vl.setContentsMargins(16,16,16,16); vl.setSpacing(12)
+
+        # Заголовок
+        h = QLabel("Random Forest — результаты обучения")
+        h.setStyleSheet(f"font-size:15px;font-weight:800;color:{t['accent']};")
+        vl.addWidget(h)
+
+        sub = QLabel(f"Обучено на {len(X_train):,} записях · Тест: {len(X_test):,} записей")
+        sub.setStyleSheet(f"font-size:11px;color:{t['text_dim']};")
+        vl.addWidget(sub)
+
+        # Метрики
+        metrics_frame = QFrame(); metrics_frame.setObjectName("card")
+        ml = QHBoxLayout(metrics_frame); ml.setContentsMargins(16,10,16,10); ml.setSpacing(0)
+
+        def metric_block(label, value, color):
+            mv = QVBoxLayout(); mv.setSpacing(2)
+            lbl = QLabel(label); lbl.setStyleSheet(f"color:{t['text_dim']};font-size:10px;")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            val = QLabel(value); val.setStyleSheet(f"font-size:20px;font-weight:900;color:{color};")
+            val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            mv.addWidget(lbl); mv.addWidget(val); ml.addLayout(mv)
+
+        metric_block("ROC-AUC",  f"{roc_auc:.4f}",  t["accent"])
+        metric_block("Accuracy", f"{accuracy:.4f}", t["positive"])
+        metric_block("F1-Score", f"{f1:.4f}",       t["positive"] if f1>0.8 else t["negative"])
+        metric_block("Деревьев", "200",              t["text_dim"])
+        vl.addWidget(metrics_frame)
+
+        # Статус модели
+        status_lbl = QLabel("✓ Модель сохранена — теперь нажмите «Прогноз на след. месяц»")
+        status_lbl.setStyleSheet(f"font-size:12px;font-weight:600;color:{t['positive']};")
+        vl.addWidget(status_lbl)
+
+        # Важность признаков
+        fi_lbl = QLabel("Важность признаков (Feature Importance):")
+        fi_lbl.setStyleSheet(f"font-size:12px;font-weight:700;color:{t['text']};")
+        vl.addWidget(fi_lbl)
+
+        fi_tbl = QTableWidget()
+        fi_tbl.setColumnCount(3)
+        fi_tbl.setHorizontalHeaderLabels(["Признак","Важность","Визуально"])
+        fi_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        fi_tbl.setColumnWidth(0, 130)
+        fi_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        fi_tbl.setColumnWidth(1, 90)
+        fi_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        fi_tbl.setAlternatingRowColors(True)
+        fi_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        fi_tbl.verticalHeader().setVisible(False)
+        fi_tbl.setFixedHeight(min(len(FEATURES)*28+30, 260))
+
+        max_imp = importances[imp_order[0]]
+        for rank, idx in enumerate(imp_order):
+            r = fi_tbl.rowCount(); fi_tbl.insertRow(r)
+            name_item = QTableWidgetItem(FEAT_NAMES[idx])
+            name_item.setForeground(QColor(t["text"]))
+            imp_val = importances[idx]
+            val_item = QTableWidgetItem(f"{imp_val:.4f}")
+            val_item.setForeground(QColor(t["accent"]))
+            val_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Прогресс-бар как текст
+            bar_len = int(imp_val / max_imp * 20)
+            bar_item = QTableWidgetItem("█" * bar_len)
+            intensity = int(imp_val / max_imp * 200) + 55
+            bar_item.setForeground(QColor(t["accent"]))
+            fi_tbl.setItem(r, 0, name_item)
+            fi_tbl.setItem(r, 1, val_item)
+            fi_tbl.setItem(r, 2, bar_item)
+
+        vl.addWidget(fi_tbl)
+        dlg.exec()
+
+    def _show_forecast(self):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QScrollArea
+        from datetime import date as _d
+        import calendar
+        import numpy as np
+
+        t = self.theme
+        df = self.df.copy()
+
+        if df.empty or "Amount" not in df.columns or "Date" not in df.columns:
+            self._msg(self,"warn","Прогноз","Нет данных для построения прогноза."); return
+
+        # Проверяем есть ли обученная модель
+        if self._rf_model is None:
+            self._msg(self,"warn","Прогноз",
+                      "Сначала обучите модель — нажмите «Обучить модель (RF)».")
+            return
+
+        df["Amount"] = pd.to_numeric(df["Amount"], errors="coerce").fillna(0)
+        df["_date"]  = pd.to_datetime(df["Date"], errors="coerce")
+        df = df.dropna(subset=["_date"])
+        df["_month"] = df["_date"].dt.to_period("M")
+
+        exp = df[df["Type"].astype(str).str.strip()=="Расход"].copy()
+        if exp.empty:
+            self._msg(self,"warn","Прогноз","Нет данных о расходах."); return
+
+        # Берём последние 6 месяцев для прогноза
+        today      = _d.today()
+        months_back = 6
+        cutoff = pd.Period(today, "M") - months_back
+        exp_recent = exp[exp["_month"] > cutoff]
+        if exp_recent.empty:
+            exp_recent = exp  # если мало данных — берём все
+
+        # Среднее по категориям за период
+        monthly_by_cat = (
+            exp_recent.groupby(["_month","Category"])["Amount"]
+            .sum()
+            .groupby("Category")
+            .mean()
+            .sort_values(ascending=False)
+        )
+        total_forecast = monthly_by_cat.sum()
+
+        # Следующий месяц
+        if today.month == 12:
+            next_m = _d(today.year+1, 1, 1)
+        else:
+            next_m = _d(today.year, today.month+1, 1)
+        next_month_name = f"{calendar.month_name[next_m.month]} {next_m.year}"
+
+        # ── RF: предсказание для каждой записи следующего месяца ────────
+        rf_predictions = []
+        try:
+            df_pred = df.copy()
+            df_pred["Amount"] = pd.to_numeric(df_pred["Amount"], errors="coerce").fillna(0)
+            df_pred["Date"]   = pd.to_datetime(df_pred["Date"], errors="coerce")
+            df_pred = df_pred.dropna(subset=["Date"])
+            df_pred["month"]          = next_m.month
+            df_pred["day"]            = 15  # середина месяца
+            df_pred["weekday"]        = 2
+            df_pred["is_weekend"]     = 0
+            df_pred["quarter"]        = (next_m.month - 1) // 3 + 1
+            df_pred["year"]           = next_m.year
+            df_pred["is_month_start"] = 0
+            df_pred["is_month_end"]   = 0
+            df_pred["log_amount"]     = np.log1p(df_pred["Amount"])
+            df_pred["sqrt_amount"]    = np.sqrt(df_pred["Amount"])
+            df_pred["category_enc"]   = self._rf_le.transform(
+                df_pred["Category"].fillna("Unknown").map(
+                    lambda x: x if x in self._rf_le.classes_ else self._rf_le.classes_[0]
+                )
+            )
+            X_pred = df_pred[self._rf_features].values
+            proba_pred = self._rf_model.predict_proba(X_pred)[:,1]
+            n_expense = int((proba_pred >= 0.5).sum())
+            n_income  = len(proba_pred) - n_expense
+            avg_conf  = float(proba_pred.mean()) * 100
+            rf_predictions = (n_expense, n_income, avg_conf, proba_pred)
+        except Exception as e:
+            rf_predictions = None
+
+        # Диалог
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"Прогноз расходов — {next_month_name}")
+        dlg.resize(580, 600)
+        dlg.setStyleSheet(f"""
+            QDialog{{background:{t['bg']};}}
+            QLabel{{color:{t['text']};background:transparent;}}
+            QTableWidget{{background:{t['surface']};alternate-background-color:{t['row_alt']};
+                color:{t['text']};gridline-color:{t['border']};border:none;font-size:13px;}}
+            QHeaderView::section{{background:{t['surface2']};color:{t['text']};padding:6px 10px;
+                font-weight:700;font-size:12px;border:none;
+                border-bottom:1px solid {t['border']};border-right:1px solid {t['border']};}}
+            QTableWidget::item{{padding:4px 8px;}}
+            QFrame#card{{background:{t['surface']};border-radius:8px;border:1px solid {t['border']};}}
+        """)
+
+        vl = QVBoxLayout(dlg); vl.setContentsMargins(18,18,18,18); vl.setSpacing(12)
+
+        # Заголовок
+        title = QLabel(f"Прогноз расходов на {next_month_name}")
+        title.setStyleSheet(f"font-size:16px;font-weight:800;color:{t['accent']};")
+        vl.addWidget(title)
+
+        # RF предсказание блок
+        if rf_predictions:
+            n_exp, n_inc, avg_conf, probas = rf_predictions
+            rf_frame = QFrame(); rf_frame.setObjectName("card")
+            rfl = QVBoxLayout(rf_frame); rfl.setContentsMargins(14,10,14,10); rfl.setSpacing(4)
+
+            rf_title = QLabel("Random Forest — классификация текущих данных")
+            rf_title.setStyleSheet(f"font-size:11px;font-weight:700;color:{t['accent']};")
+            rf_sub = QLabel(
+                f"Из {n_exp+n_inc:,} записей модель определила: "
+                f"{n_exp:,} расходов ({n_exp/(n_exp+n_inc)*100:.1f}%) и "
+                f"{n_inc:,} доходов ({n_inc/(n_exp+n_inc)*100:.1f}%) "
+                f"со средней уверенностью {avg_conf:.1f}%"
+            )
+            rf_sub.setStyleSheet(f"font-size:12px;color:{t['text']};")
+            rf_sub.setWordWrap(True)
+            rfl.addWidget(rf_title); rfl.addWidget(rf_sub)
+            vl.addWidget(rf_frame)
+
+        note = QLabel(f"Статистический прогноз: среднее за последние {months_back} месяцев")
+        note.setStyleSheet(f"font-size:11px;color:{t['text_dim']};")
+        vl.addWidget(note)
+
+        # Итоговая сумма
+        total_lbl = QLabel(f"Ожидаемые расходы: {total_forecast:,.0f} ₽")
+        total_lbl.setStyleSheet(f"font-size:18px;font-weight:900;color:{t['negative']};")
+        vl.addWidget(total_lbl)
+
+        # Таблица по категориям
+        tbl = QTableWidget()
+        tbl.setColumnCount(3)
+        tbl.setHorizontalHeaderLabels(["Категория","Прогноз (₽)","Доля"])
+        h = tbl.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed); tbl.setColumnWidth(1,130)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed); tbl.setColumnWidth(2,100)
+        tbl.setAlternatingRowColors(True)
+        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        tbl.verticalHeader().setVisible(False)
+
+        COLORS = PIE_COLORS
+
+        for i, (cat, amt) in enumerate(monthly_by_cat.items()):
+            r = tbl.rowCount(); tbl.insertRow(r)
+            pct = amt / total_forecast * 100 if total_forecast > 0 else 0
+
+            # Цветной квадрат + название категории
+            it_cat = QTableWidgetItem(f"  {cat}")
+            it_cat.setForeground(QColor(t["text"]))
+            from PyQt6.QtGui import QFont as _QF
+            it_cat.setFont(_QF("Segoe UI", 11))
+
+            it_amt = QTableWidgetItem(f"{amt:,.0f} ₽")
+            it_amt.setForeground(QColor(COLORS[i % len(COLORS)]))
+            it_amt.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_amt.setFont(_QF("Segoe UI", 10, 75))
+
+            it_pct = QTableWidgetItem(f"{pct:.1f}%")
+            it_pct.setForeground(QColor(t["text_dim"]))
+            it_pct.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            tbl.setItem(r,0,it_cat); tbl.setItem(r,1,it_amt); tbl.setItem(r,2,it_pct)
+
+        vl.addWidget(tbl)
+
+        # Визуальный бар с подписями категорий
+        bar_lbl = QLabel("Распределение по категориям:")
+        bar_lbl.setStyleSheet(f"font-size:11px;color:{t['text_dim']};margin-top:4px;")
+        vl.addWidget(bar_lbl)
+
+        class BarWidget(QWidget):
+            def __init__(self, data, total, colors, theme):
+                super().__init__()
+                self.data   = data
+                self.total  = total
+                self.colors = colors
+                self.t      = theme
+                self.setFixedHeight(52)
+
+            def paintEvent(self, e):
+                p = QPainter(self)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing)
+                W = self.width(); x = 0; bar_h = 28
+                items = list(self.data.items())
+                for i, (cat, amt) in enumerate(items):
+                    w = int(amt / self.total * W) if self.total > 0 else 0
+                    if w < 2: continue
+                    color = QColor(self.colors[i % len(self.colors)])
+                    p.setBrush(QBrush(color)); p.setPen(Qt.PenStyle.NoPen)
+                    if i == 0:
+                        p.drawRoundedRect(x, 0, w, bar_h, 6, 6)
+                    elif i == len(items) - 1:
+                        p.drawRoundedRect(x, 0, W - x, bar_h, 6, 6)
+                    else:
+                        p.drawRect(x, 0, w, bar_h)
+                    # Подпись категории если хватает места
+                    if w > 40:
+                        p.setPen(QColor("white"))
+                        p.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+                        short = cat[:6] + ".." if len(cat) > 7 else cat
+                        p.drawText(x+4, 0, w-6, bar_h,
+                                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                                   short)
+                    # Точка легенды внизу
+                    p.setBrush(QBrush(color)); p.setPen(Qt.PenStyle.NoPen)
+                    p.drawEllipse(x + w//2 - 4, bar_h + 8, 8, 8)
+                    x += w
+                p.end()
+
+        bw = BarWidget(monthly_by_cat, total_forecast, COLORS, t)
+        vl.addWidget(bw)
+
+        dlg.exec()
+
+    def _show_history_popup(self):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout
+        from PyQt6.QtGui import QFont as _QF
+        t = self.theme
+        dlg = QDialog(self)
+        dlg.setWindowTitle("История тугриков")
+        dlg.resize(640, 500)
+        dlg.setStyleSheet(f"""
+            QDialog{{background:{t['bg']};}}
+            QTableWidget{{background:{t['surface']};alternate-background-color:{t['row_alt']};
+                color:{t['text']};gridline-color:{t['border']};border:none;font-size:13px;}}
+            QHeaderView::section{{background:{t['surface2']};color:{t['text']};padding:6px 10px;
+                font-weight:700;font-size:12px;border:none;
+                border-bottom:1px solid {t['border']};border-right:1px solid {t['border']};}}
+            QTableWidget::item{{padding:4px 8px;}}
+            QPushButton{{background:{t['accent']};color:white;border:none;border-radius:6px;
+                padding:5px 14px;font-size:12px;font-weight:600;}}
+            QPushButton:hover{{background:{t['accent']}dd;}}
+            QPushButton#active_filter{{background:{t['positive']};}}
+            QPushButton#red{{background:{t['negative']};}}
+            QPushButton#red:hover{{background:#e05555;}}
+            QLabel{{color:{t['text']};background:transparent;}}
+        """)
+
+        vl = QVBoxLayout(dlg); vl.setContentsMargins(14,14,14,14); vl.setSpacing(10)
+
+        # Строка 1: баланс + кнопка очистить
+        hdr = QHBoxLayout()
+        bal = QLabel(f"Текущий баланс: {self.state['tugriki']} 💰")
+        bal.setStyleSheet(f"font-size:15px;font-weight:700;color:{t['positive']};")
+        hdr.addWidget(bal); hdr.addStretch()
+        clr = QPushButton("Очистить историю"); clr.setObjectName("red"); clr.setFixedHeight(30)
+        hdr.addWidget(clr); vl.addLayout(hdr)
+
+        # Строка 2: фильтры
+        flt = QHBoxLayout()
+        btn_all = QPushButton("Все")
+        btn_inc = QPushButton("Поступления")
+        btn_dec = QPushButton("Списания")
+        for b in [btn_all, btn_inc, btn_dec]:
+            b.setFixedHeight(28)
+            b.setCheckable(False)
+            flt.addWidget(b)
+        flt.addStretch()
+        # Счётчики
+        history = self.state.get("history", [])
+        cnt_inc = sum(1 for e in history if str(e["amount"]).startswith("+"))
+        cnt_dec = len(history) - cnt_inc
+        btn_all.setText(f"Все ({len(history)})")
+        btn_inc.setText(f"Поступления ({cnt_inc})")
+        btn_dec.setText(f"Списания ({cnt_dec})")
+        vl.addLayout(flt)
+
+        # Таблица
+        tbl = QTableWidget()
+        tbl.setColumnCount(4)
+        tbl.setHorizontalHeaderLabels(["Дата и время","Операция","Сумма","Баланс после"])
+        h = tbl.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed); tbl.setColumnWidth(0,140)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed); tbl.setColumnWidth(2,90)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed); tbl.setColumnWidth(3,110)
+        tbl.setAlternatingRowColors(True)
+        tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        tbl.verticalHeader().setVisible(False)
+        vl.addWidget(tbl)
+
+        def fill_table(mode="all"):
+            tbl.setRowCount(0)
+            for entry in self.state.get("history", []):
+                is_plus = str(entry["amount"]).startswith("+")
+                if mode == "inc" and not is_plus: continue
+                if mode == "dec" and is_plus: continue
+                r = tbl.rowCount(); tbl.insertRow(r)
+                amt_col = QColor(t["positive"]) if is_plus else QColor(t["negative"])
+                for ci, key in enumerate(["date","desc","amount","balance"]):
+                    val = str(entry.get(key,""))
+                    item = QTableWidgetItem(val)
+                    item.setForeground(amt_col if key=="amount" else QColor(t["text"]))
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter if key!="desc"
+                                         else Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+                    if key == "amount":
+                        item.setFont(_QF("Segoe UI", 10, 75))
+                    tbl.setItem(r, ci, item)
+            # Подсвечиваем активную кнопку
+            active_style = f"background:{t['accent']}; color:white; border:none; border-radius:6px; padding:5px 14px; font-size:12px; font-weight:700;"
+            normal_style = f"background:{t['surface2']}; color:{t['text']}; border:1px solid {t['border']}; border-radius:6px; padding:5px 14px; font-size:12px; font-weight:600;"
+            btn_all.setStyleSheet(active_style if mode=="all" else normal_style)
+            btn_inc.setStyleSheet(active_style if mode=="inc" else normal_style)
+            btn_dec.setStyleSheet(active_style if mode=="dec" else normal_style)
+
+        btn_all.clicked.connect(lambda: fill_table("all"))
+        btn_inc.clicked.connect(lambda: fill_table("inc"))
+        btn_dec.clicked.connect(lambda: fill_table("dec"))
+
+        def do_clear():
+            self._clear_history()
+            bal.setText(f"Текущий баланс: {self.state['tugriki']} 💰")
+            btn_all.setText("Все (0)"); btn_inc.setText("Поступления (0)"); btn_dec.setText("Списания (0)")
+            fill_table("all")
+        clr.clicked.connect(do_clear)
+
+        fill_table("all")
+        dlg.exec()
+
+    def _refresh_history(self):
+        # Обновляем баланс в топбаре
+        if hasattr(self, "hist_bal_lbl"):
+            self.hist_bal_lbl.setText(f"Баланс: {self.state['tugriki']} 💰")
+
+    def _clear_history(self):
+        self.state["history"] = []
+        self._save()
+        self._refresh_history()
+
+    def _record_history(self, amount_str, description):
+        from datetime import datetime
+        if "history" not in self.state:
+            self.state["history"] = []
+        self.state["history"].insert(0, {
+            "amount": amount_str,
+            "desc":   description,
+            "date":   datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "balance": self.state["tugriki"]
+        })
+        # Храним не более 200 записей
+        self.state["history"] = self.state["history"][:200]
+
     def _buy(self,item):
         if self.state["tugriki"]>=item["price"]:
             self.state["tugriki"]-=item["price"]
             self.state["purchased"].append(item["name"])
+            self._record_history(f'-{item["price"]}', f'Покупка: {item["name"]}')
             self._save(); self._update_tug(); self._refresh_inv()
             self._msg(self,"info","Куплено!",f"Вы приобрели: {item['name']}")
         else:
@@ -1223,7 +1783,7 @@ def load_data():
         try:
             with open(DATA_FILE,"r",encoding="utf-8") as f: return json.load(f)
         except: pass
-    return {"tasks":[],"tugriki":0,"purchased":[]}
+    return {"tasks":[],"tugriki":0,"purchased":[],"history":[]}
 
 
 if __name__=="__main__":
