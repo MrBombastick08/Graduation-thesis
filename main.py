@@ -87,51 +87,50 @@ class ExclTag(QFrame):
     removed = pyqtSignal(int)
     def __init__(self, n, accent):
         super().__init__(); self.n = n
-        # Немного увеличим высоту для лучшего вида
-        self.setFixedHeight(30)
+        self.setFixedHeight(32)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 8, 0)
-        lay.setSpacing(8)
+        lay.setContentsMargins(12, 0, 6, 0)
+        lay.setSpacing(10)
         
-        # Число — делаем его максимально контрастным (белым или очень светлым)
+        # Число — делаем его максимально контрастным (белым)
         lbl = QLabel(str(n))
         lbl.setStyleSheet("color: white; font-weight: 900; font-size: 15px; background: transparent; border: none;")
         
-        # Кнопка удаления — делаем её заметнее
+        # Кнопка удаления — теперь она будет всегда видна (белый крестик на красном фоне при наведении)
+        # Изначально — серый крестик на светлом фоне для контраста
         btn = QPushButton("✕")
-        btn.setFixedSize(20, 20)
+        btn.setFixedSize(22, 22)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setToolTip("Удалить число")
-        btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(255, 255, 255, 0.15); 
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: rgba(255, 255, 255, 0.2); 
                 color: white; 
                 border: none; 
-                border-radius: 10px;
-                font-size: 11px; 
+                border-radius: 11px;
+                font-size: 12px; 
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #ff4444;
+            }}
+            QPushButton:hover {{
+                background: #e74c3c;
                 color: white;
-            }
+            }}
         """)
         btn.clicked.connect(lambda: self.removed.emit(self.n))
         
         lay.addWidget(lbl)
         lay.addWidget(btn)
         
-        # Основной стиль: отказываемся от зеленого, используем глубокий серый/акцентный для фона
-        # Это обеспечит отличную читаемость белого текста
+        # Стиль рамки — используем ваш акцентный цвет для границы
         self.setStyleSheet(f"""
             QFrame {{
-                background-color: #444444;
-                border: 1px solid {accent};
-                border-radius: 15px;
+                background-color: #2c3e50;
+                border: 2px solid {accent};
+                border-radius: 16px;
             }}
             QFrame:hover {{
-                background-color: #555555;
-                border: 1px solid white;
+                background-color: #34495e;
+                border: 2px solid white;
             }}
         """)
 
@@ -1525,7 +1524,20 @@ class App(QMainWindow):
         lbl_excl = QLabel("Исключить:"); lbl_excl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
         self.d_excl=QLineEdit(); self.d_excl.setPlaceholderText("напр: 3, 7, 9")
         self.d_excl.setFixedWidth(150); self.d_excl.returnPressed.connect(self._add_excl)
-        eb=QPushButton("Добавить"); eb.setFixedWidth(90); eb.clicked.connect(self._add_excl)
+        eb=QPushButton("Добавить"); eb.setFixedWidth(90); eb.setFixedHeight(32); eb.clicked.connect(self._add_excl)
+        # Стилизуем кнопку "Добавить" в общем стиле приложения (как кнопку броска, но меньше)
+        eb.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {self.theme['accent']};
+                color: white;
+                font-weight: bold;
+                border-radius: 6px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {self.theme['accent']}cc;
+            }}
+        """)
         fl.addWidget(lbl_excl, 1, 0)
         fl.addWidget(self.d_excl, 1, 1, 1, 3)
         fl.addWidget(eb, 1, 4)
