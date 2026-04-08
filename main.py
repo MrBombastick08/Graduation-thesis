@@ -87,54 +87,15 @@ class ExclTag(QFrame):
     removed = pyqtSignal(int)
     def __init__(self, n, accent):
         super().__init__(); self.n = n
-        self.setFixedHeight(34)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 4, 0)
-        lay.setSpacing(12)
-        
-        # Число — ярко-белое
-        lbl = QLabel(str(n))
-        lbl.setStyleSheet("color: white; font-weight: 900; font-size: 16px; background: transparent; border: none;")
-        
-        # Кнопка удаления — делаем её максимально контрастной и видимой
-        # Используем "x" вместо специального символа, чтобы он точно отобразился
-        btn = QPushButton("x")
-        btn.setFixedSize(24, 24)
+        lay = QHBoxLayout(self); lay.setContentsMargins(8,2,4,2); lay.setSpacing(4)
+        self.setFixedHeight(26)
+        lbl = QLabel(str(n)); lbl.setStyleSheet(f"color:{accent};font-weight:bold;font-size:12px;background:transparent;")
+        btn = QPushButton("✕"); btn.setFixedSize(16,16)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip("Удалить число")
-        # По умолчанию кнопка имеет серый фон и белый текст, при наведении — красная
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #5d6d7e; 
-                color: white; 
-                border: none; 
-                border-radius: 12px;
-                font-size: 14px; 
-                font-weight: 800;
-                padding-bottom: 2px;
-            }}
-            QPushButton:hover {{
-                background-color: #e74c3c;
-                color: white;
-            }}
-        """)
+        btn.setStyleSheet("QPushButton{background:transparent;border:none;}QPushButton:hover{color:white;}")
         btn.clicked.connect(lambda: self.removed.emit(self.n))
-        
-        lay.addWidget(lbl)
-        lay.addWidget(btn)
-        
-        # Основной стиль тега
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: #2c3e50;
-                border: 2px solid {accent};
-                border-radius: 17px;
-            }}
-            QFrame:hover {{
-                background-color: #34495e;
-                border: 2px solid white;
-            }}
-        """)
+        lay.addWidget(lbl); lay.addWidget(btn)
+        self.setStyleSheet(f"QFrame{{background:{accent}28;border-radius:11px;border:1px solid {accent}55;}}")
 
 
 class PieWidget(QWidget):
@@ -271,7 +232,7 @@ class App(QMainWindow):
                 padding:7px 16px;font-size:13px;font-weight:600;}}
             QPushButton:hover{{background:{t['accent']}dd;}}
             QPushButton:disabled{{background:{t['border']};color:{t['text_dim']};}}
-            QPushButton#outline{{background:transparent;border:1.5px solid {t['accent']};color:{t['accent']};}}
+            QPushButton#outline{{background:transparent;border:1.5px solid {t['accent']};color:{t['accent']};padding:5px 12px;}}
             QPushButton#outline:hover{{background:{t['surface2']};}}
             QPushButton#cal_arrow{{background:{t['surface2']};color:{t['text']};border:1.5px solid {t['border']};border-radius:6px;font-size:10px;padding:0;}}
             QPushButton#cal_arrow:hover{{background:{t['border']};}}
@@ -475,7 +436,6 @@ class App(QMainWindow):
         sep2.setStyleSheet(f"background:{self.theme['border']};max-width:1px;border:none;")
         bl.addWidget(sep2)
         forecast_btn=QPushButton("Прогноз на след. месяц")
-        forecast_btn.setFixedHeight(28)
         forecast_btn.setObjectName("outline")
         forecast_btn.clicked.connect(self._show_forecast)
         bl.addWidget(forecast_btn)
@@ -484,7 +444,6 @@ class App(QMainWindow):
         sep3.setStyleSheet(f"background:{self.theme['border']};max-width:1px;border:none;")
         bl.addWidget(sep3)
         ml_btn=QPushButton("Обучить модель (RF)")
-        ml_btn.setFixedHeight(28)
         ml_btn.setObjectName("outline")
         ml_btn.clicked.connect(self._train_and_show_ml)
         bl.addWidget(ml_btn)
@@ -1526,35 +1485,16 @@ class App(QMainWindow):
         lbl_excl = QLabel("Исключить:"); lbl_excl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
         self.d_excl=QLineEdit(); self.d_excl.setPlaceholderText("напр: 3, 7, 9")
         self.d_excl.setFixedWidth(150); self.d_excl.returnPressed.connect(self._add_excl)
-        eb=QPushButton("Добавить"); eb.setFixedWidth(100); eb.setFixedHeight(34); eb.clicked.connect(self._add_excl)
-        # Улучшенный стиль кнопки без "обрубленности"
-        eb.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {self.theme['accent']};
-                color: white;
-                font-weight: 800;
-                border: none;
-                border-radius: 8px;
-                font-size: 13px;
-                padding: 4px 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {self.theme['accent']}ee;
-                border: 1px solid white;
-            }}
-        """)
+        eb=QPushButton("Добавить"); eb.setFixedWidth(90); eb.clicked.connect(self._add_excl)
         fl.addWidget(lbl_excl, 1, 0)
         fl.addWidget(self.d_excl, 1, 1, 1, 3)
         fl.addWidget(eb, 1, 4)
 
         vl.addWidget(form_w, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.tags_w=QWidget()
-        self.tags_w.setFixedHeight(40)
-        self.tags_lay=QHBoxLayout(self.tags_w)
-        self.tags_lay.setContentsMargins(0,0,0,0); self.tags_lay.setSpacing(8)
-        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        vl.addWidget(self.tags_w)
+        self.tags_w=QWidget(); self.tags_lay=QHBoxLayout(self.tags_w)
+        self.tags_lay.setContentsMargins(0,0,0,0); self.tags_lay.setSpacing(5)
+        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter); vl.addWidget(self.tags_w)
 
         self.dice=DiceWidget(); self.dice.update_theme(self.theme)
         vl.addWidget(self.dice,alignment=Qt.AlignmentFlag.AlignCenter)
@@ -1685,12 +1625,9 @@ class App(QMainWindow):
         while self.tags_lay.count():
             item=self.tags_lay.takeAt(0)
             if item.widget(): item.widget().deleteLater()
-        
-        self.tags_lay.addStretch()
         for n in self.excl:
             tag=ExclTag(n,self.theme["accent"]); tag.removed.connect(self._rm_excl)
             self.tags_lay.addWidget(tag)
-        self.tags_lay.addStretch()
 
     def _rm_excl(self,n):
         if n in self.excl: self.excl.remove(n)
