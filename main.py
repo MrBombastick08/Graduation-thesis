@@ -87,38 +87,51 @@ class ExclTag(QFrame):
     removed = pyqtSignal(int)
     def __init__(self, n, accent):
         super().__init__(); self.n = n
-        lay = QHBoxLayout(self); lay.setContentsMargins(12, 0, 8, 0); lay.setSpacing(6)
-        self.setFixedHeight(28)
+        # Немного увеличим высоту для лучшего вида
+        self.setFixedHeight(30)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 8, 0)
+        lay.setSpacing(8)
         
+        # Число — делаем его максимально контрастным (белым или очень светлым)
         lbl = QLabel(str(n))
-        lbl.setStyleSheet(f"color: {accent}; font-weight: 800; font-size: 14px; background: transparent; border: none;")
+        lbl.setStyleSheet("color: white; font-weight: 900; font-size: 15px; background: transparent; border: none;")
         
+        # Кнопка удаления — делаем её заметнее
         btn = QPushButton("✕")
-        btn.setFixedSize(16, 16)
+        btn.setFixedSize(20, 20)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent; 
-                color: {accent}99; 
+        btn.setToolTip("Удалить число")
+        btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 0.15); 
+                color: white; 
                 border: none; 
-                font-size: 14px; 
+                border-radius: 10px;
+                font-size: 11px; 
                 font-weight: bold;
-            }}
-            QPushButton:hover {{
-                color: #ff4444;
-            }}
+            }
+            QPushButton:hover {
+                background: #ff4444;
+                color: white;
+            }
         """)
         btn.clicked.connect(lambda: self.removed.emit(self.n))
         
         lay.addWidget(lbl)
         lay.addWidget(btn)
         
-        # Прозрачный фон с аккуратной границей
+        # Основной стиль: отказываемся от зеленого, используем глубокий серый/акцентный для фона
+        # Это обеспечит отличную читаемость белого текста
         self.setStyleSheet(f"""
             QFrame {{
-                background: {accent}1a;
-                border: 1px solid {accent}66;
-                border-radius: 14px;
+                background-color: #444444;
+                border: 1px solid {accent};
+                border-radius: 15px;
+            }}
+            QFrame:hover {{
+                background-color: #555555;
+                border: 1px solid white;
             }}
         """)
 
