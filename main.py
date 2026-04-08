@@ -87,15 +87,46 @@ class ExclTag(QFrame):
     removed = pyqtSignal(int)
     def __init__(self, n, accent):
         super().__init__(); self.n = n
-        lay = QHBoxLayout(self); lay.setContentsMargins(8,2,4,2); lay.setSpacing(4)
-        self.setFixedHeight(26)
-        lbl = QLabel(str(n)); lbl.setStyleSheet(f"color:{accent};font-weight:bold;font-size:12px;background:transparent;")
-        btn = QPushButton("✕"); btn.setFixedSize(16,16)
+        lay = QHBoxLayout(self); lay.setContentsMargins(10, 0, 6, 0); lay.setSpacing(6)
+        self.setFixedHeight(28)
+        
+        lbl = QLabel(str(n))
+        lbl.setStyleSheet(f"color: {accent}; font-weight: 800; font-size: 13px; background: transparent; border: none;")
+        
+        btn = QPushButton("✕")
+        btn.setFixedSize(18, 18)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet("QPushButton{background:transparent;border:none;}QPushButton:hover{color:white;}")
+        # Улучшенная кнопка удаления с эффектом при наведении
+        btn.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent; 
+                color: {accent}aa; 
+                border: none; 
+                font-size: 14px; 
+                font-weight: bold;
+                margin-top: 1px;
+            }}
+            QPushButton:hover {{
+                color: #ff5555;
+            }}
+        """)
         btn.clicked.connect(lambda: self.removed.emit(self.n))
-        lay.addWidget(lbl); lay.addWidget(btn)
-        self.setStyleSheet(f"QFrame{{background:{accent}28;border-radius:11px;border:1px solid {accent}55;}}")
+        
+        lay.addWidget(lbl)
+        lay.addWidget(btn)
+        
+        # Более мягкий фон, четкая граница и небольшая тень для объема
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {accent}15;
+                border: 1px solid {accent}44;
+                border-radius: 14px;
+            }}
+            QFrame:hover {{
+                background-color: {accent}25;
+                border: 1px solid {accent}88;
+            }}
+        """)
 
 
 class PieWidget(QWidget):
@@ -1495,8 +1526,17 @@ class App(QMainWindow):
         vl.addWidget(form_w, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.tags_w=QWidget(); self.tags_lay=QHBoxLayout(self.tags_w)
-        self.tags_lay.setContentsMargins(0,0,0,0); self.tags_lay.setSpacing(5)
-        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter); vl.addWidget(self.tags_w)
+        self.tags_lay.setContentsMargins(0,10,0,10); self.tags_lay.setSpacing(8)
+        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Добавляем контейнер в ScrollArea, если тегов станет слишком много
+        self.tags_scroll = QScrollArea()
+        self.tags_scroll.setWidgetResizable(True)
+        self.tags_scroll.setFixedHeight(50)
+        self.tags_scroll.setWidget(self.tags_w)
+        self.tags_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;} QScrollBar:horizontal{height:4px;}")
+        self.tags_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tags_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        vl.addWidget(self.tags_scroll)
 
         self.dice=DiceWidget(); self.dice.update_theme(self.theme)
         vl.addWidget(self.dice,alignment=Qt.AlignmentFlag.AlignCenter)
@@ -1627,9 +1667,12 @@ class App(QMainWindow):
         while self.tags_lay.count():
             item=self.tags_lay.takeAt(0)
             if item.widget(): item.widget().deleteLater()
+        
+        self.tags_lay.addStretch()
         for n in self.excl:
             tag=ExclTag(n,self.theme["accent"]); tag.removed.connect(self._rm_excl)
             self.tags_lay.addWidget(tag)
+        self.tags_lay.addStretch()
 
     def _rm_excl(self,n):
         if n in self.excl: self.excl.remove(n)
