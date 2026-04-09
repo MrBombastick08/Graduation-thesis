@@ -85,17 +85,35 @@ class DiceWidget(QWidget):
 
 class ExclTag(QFrame):
     removed = pyqtSignal(int)
-    def __init__(self, n, accent):
+    def __init__(self, n, theme):
         super().__init__(); self.n = n
-        lay = QHBoxLayout(self); lay.setContentsMargins(8,2,4,2); lay.setSpacing(4)
-        self.setFixedHeight(26)
-        lbl = QLabel(str(n)); lbl.setStyleSheet(f"color:{accent};font-weight:bold;font-size:12px;background:transparent;")
-        btn = QPushButton("✕"); btn.setFixedSize(16,16)
+        self.setObjectName("excl_tag")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 5, 0); lay.setSpacing(4)
+        self.setFixedHeight(28)
+
+        lbl = QLabel(str(n))
+        lbl.setStyleSheet(
+            f"color:{theme['text']};font-size:13px;"
+            f"font-weight:600;background:transparent;border:none;"
+        )
+
+        btn = QPushButton("×")
+        btn.setFixedSize(16, 16)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet("QPushButton{background:transparent;border:none;}QPushButton:hover{color:white;}")
+        btn.setStyleSheet(
+            f"QPushButton{{background:transparent;border:none;"
+            f"color:{theme['text_dim']};font-size:16px;padding:0;margin:0;}}"
+            f"QPushButton:hover{{color:{theme['negative']};}}"
+        )
         btn.clicked.connect(lambda: self.removed.emit(self.n))
+
         lay.addWidget(lbl); lay.addWidget(btn)
-        self.setStyleSheet(f"QFrame{{background:{accent}28;border-radius:11px;border:1px solid {accent}55;}}")
+        self.setStyleSheet(
+            f"QFrame#excl_tag{{background:{theme['surface2']};border-radius:14px;"
+            f"border:1px solid {theme['border']};}}"
+            f"QFrame#excl_tag:hover{{border-color:{theme['accent']};}}"
+        )
 
 
 class PieWidget(QWidget):
@@ -1455,59 +1473,72 @@ class App(QMainWindow):
 
         # ── Левая часть: кубик ──────────────────────────────────────────────
         wrap=QFrame(); wrap.setObjectName("card")
-        vl=QVBoxLayout(wrap); vl.setContentsMargins(30,28,30,28); vl.setSpacing(12)
-        vl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vl=QVBoxLayout(wrap); vl.setContentsMargins(20,20,20,20); vl.setSpacing(6)
+        vl.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+        # Заголовок
         ttl=QLabel("Рандомайзер"); ttl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ttl.setStyleSheet("font-size:22px;font-weight:800;"); vl.addWidget(ttl)
+        ttl.setStyleSheet("font-size:20px;font-weight:800;"); vl.addWidget(ttl)
         sub=QLabel("Бросьте кубик и получите случайное число")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet(f"color:{self.theme['text_dim']};font-size:12px;"); vl.addWidget(sub)
+        sub.setStyleSheet(f"color:{self.theme['text_dim']};font-size:11px;")
+        vl.addWidget(sub)
 
-        # Форма — фиксированная ширина 320px, выравнивается по центру
-        form_w = QWidget(); form_w.setStyleSheet("background:transparent;")
-        form_w.setFixedWidth(320)
-        fl = QGridLayout(form_w)
-        fl.setContentsMargins(0,0,0,0); fl.setSpacing(8)
-        fl.setColumnStretch(1, 0)
+        vl.addSpacing(4)
 
-        lbl_from = QLabel("От:"); lbl_from.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
-        self.d_min=QLineEdit("1"); self.d_min.setFixedWidth(60)
-        lbl_to = QLabel("До:"); lbl_to.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.d_max=QLineEdit("10"); self.d_max.setFixedWidth(60)
-        hint=QLabel("(макс. 128)"); hint.setStyleSheet(f"color:{self.theme['text_dim']};font-size:11px;")
-        fl.addWidget(lbl_from, 0, 0)
-        fl.addWidget(self.d_min, 0, 1)
-        fl.addWidget(lbl_to,   0, 2)
-        fl.addWidget(self.d_max, 0, 3)
-        fl.addWidget(hint,     0, 4)
+        # Контейнер фиксированной ширины для обоих строк
+        # Строка: От / До — по центру
+        rr=QHBoxLayout(); rr.setContentsMargins(0,0,0,0); rr.setSpacing(8)
+        rr.addStretch()
+        rr.addWidget(QLabel("От:"))
+        self.d_min=QLineEdit("1"); self.d_min.setFixedWidth(55); rr.addWidget(self.d_min)
+        rr.addSpacing(12)
+        rr.addWidget(QLabel("До:"))
+        self.d_max=QLineEdit("10"); self.d_max.setFixedWidth(55); rr.addWidget(self.d_max)
+        hint=QLabel("макс. 128"); hint.setStyleSheet(f"color:{self.theme['text_dim']};font-size:10px;")
+        rr.addSpacing(8); rr.addWidget(hint)
+        rr.addStretch()
+        vl.addLayout(rr)
 
-        lbl_excl = QLabel("Исключить:"); lbl_excl.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
-        self.d_excl=QLineEdit(); self.d_excl.setPlaceholderText("напр: 3, 7, 9")
-        self.d_excl.setFixedWidth(150); self.d_excl.returnPressed.connect(self._add_excl)
-        eb=QPushButton("Добавить"); eb.setFixedWidth(90); eb.clicked.connect(self._add_excl)
-        fl.addWidget(lbl_excl, 1, 0)
-        fl.addWidget(self.d_excl, 1, 1, 1, 3)
-        fl.addWidget(eb, 1, 4)
+        # Строка: Исключить — по центру
+        er=QHBoxLayout(); er.setContentsMargins(0,0,0,0); er.setSpacing(8)
+        er.addStretch()
+        er.addWidget(QLabel("Исключить:"))
+        self.d_excl=QLineEdit(); self.d_excl.setPlaceholderText("3, 7, 9")
+        self.d_excl.setFixedWidth(90); self.d_excl.returnPressed.connect(self._add_excl)
+        er.addWidget(self.d_excl)
+        eb=QPushButton("Добавить"); eb.setFixedHeight(28); eb.setFixedWidth(95)
+        eb.setStyleSheet(f"background:{self.theme['accent']};color:white;border:none;border-radius:7px;font-size:12px;font-weight:600;")
+        eb.clicked.connect(self._add_excl); er.addWidget(eb)
+        clr_excl=QPushButton("Очистить"); clr_excl.setFixedHeight(28); clr_excl.setFixedWidth(90)
+        clr_excl.setObjectName("outline"); clr_excl.clicked.connect(self._clear_excl)
+        er.addWidget(clr_excl)
+        er.addStretch()
+        vl.addLayout(er)
 
-        vl.addWidget(form_w, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Теги исключённых чисел
+        self.tags_w=QWidget(); self.tags_w.setStyleSheet("background:transparent;")
+        self.tags_lay=QHBoxLayout(self.tags_w)
+        self.tags_lay.setContentsMargins(0,2,0,2); self.tags_lay.setSpacing(5)
+        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        vl.addWidget(self.tags_w)
 
-        self.tags_w=QWidget(); self.tags_lay=QHBoxLayout(self.tags_w)
-        self.tags_lay.setContentsMargins(0,0,0,0); self.tags_lay.setSpacing(5)
-        self.tags_lay.setAlignment(Qt.AlignmentFlag.AlignCenter); vl.addWidget(self.tags_w)
-
+        # Кубик
         self.dice=DiceWidget(); self.dice.update_theme(self.theme)
-        vl.addWidget(self.dice,alignment=Qt.AlignmentFlag.AlignCenter)
+        vl.addWidget(self.dice, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.res_lbl=QLabel(""); self.res_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.res_lbl.setStyleSheet(f"font-size:13px;color:{self.theme['text_dim']};")
+        # Результат
+        self.res_lbl=QLabel("")
+        self.res_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.res_lbl.setStyleSheet(f"font-size:12px;color:{self.theme['text_dim']};")
         vl.addWidget(self.res_lbl)
 
-        self.roll_btn=QPushButton("Бросить кубик"); self.roll_btn.setFixedWidth(210)
-        self.roll_btn.setFixedHeight(44)
-        self.roll_btn.setStyleSheet("font-size:15px;font-weight:700;border-radius:8px;")
+        # Кнопка бросить
+        self.roll_btn=QPushButton("Бросить кубик")
+        self.roll_btn.setFixedWidth(200); self.roll_btn.setFixedHeight(42)
+        self.roll_btn.setStyleSheet("font-size:14px;font-weight:700;border-radius:8px;")
         self.roll_btn.clicked.connect(self._start_roll)
-        vl.addWidget(self.roll_btn,alignment=Qt.AlignmentFlag.AlignCenter)
+        vl.addWidget(self.roll_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         splitter.addWidget(wrap)
 
@@ -1626,8 +1657,12 @@ class App(QMainWindow):
             item=self.tags_lay.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         for n in self.excl:
-            tag=ExclTag(n,self.theme["accent"]); tag.removed.connect(self._rm_excl)
+            tag=ExclTag(n, self.theme); tag.removed.connect(self._rm_excl)
             self.tags_lay.addWidget(tag)
+
+    def _clear_excl(self):
+        self.excl.clear()
+        self._refresh_tags()
 
     def _rm_excl(self,n):
         if n in self.excl: self.excl.remove(n)
