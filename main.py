@@ -347,6 +347,8 @@ class App(QMainWindow):
             )
         if hasattr(self,"dice"):
             self.dice.update_theme(t)
+        if hasattr(self,"tags_lay"):
+            self._refresh_tags()
         if hasattr(self,"inv_scroll"):
             self._inv_scroll_update_bg()
             self._refresh_inv()
@@ -424,6 +426,7 @@ class App(QMainWindow):
         cur_y=_date.today().year
         self.sum_year.addItems([str(y) for y in range(cur_y,cur_y-10,-1)])
         self.sum_year.setFixedWidth(70); self.sum_year.setVisible(False)
+        self.sum_year.currentTextChanged.connect(lambda _: self._on_quick_period(self.sum_quick.currentText()))
         bl.addWidget(self.sum_year)
         bl.addWidget(QLabel("С:"))
         self.sum_from=QLineEdit(_date.today().replace(day=1).isoformat())
@@ -609,6 +612,32 @@ class App(QMainWindow):
         self._editing_row=None
         if hasattr(self,"edit_mode_lbl"): self.edit_mode_lbl.setText("")
         self._refresh_tbl(); self._refresh_charts()
+        self._update_year_combo()
+
+    def _update_year_combo(self):
+        """Обновляет список годов в сводке на основе данных CSV"""
+        if not hasattr(self, "sum_year"): return
+        try:
+            dates = pd.to_datetime(self.df["Date"], errors="coerce").dropna()
+            if dates.empty: raise ValueError
+            years = sorted(dates.dt.year.unique(), reverse=True)
+            first_date = dates.min().strftime("%Y-%m-%d")
+        except:
+            from datetime import date as _d
+            cur_y = _d.today().year
+            years = list(range(cur_y, cur_y-10, -1))
+            first_date = f"{years[-1]}-01-01"
+
+        self.sum_year.blockSignals(True)
+        self.sum_year.clear()
+        self.sum_year.addItems([str(y) for y in years])
+        self.sum_year.blockSignals(False)
+
+        # Сохраняем первую дату файла для "За всё время"
+        self._csv_first_date = first_date
+
+        # Обновляем даты в полях под текущий выбранный период
+        self._on_quick_period(self.sum_quick.currentText())
 
     def _refresh_tbl(self):
         t=self.theme; self.fin_tbl.setRowCount(0)
@@ -1734,11 +1763,19 @@ class App(QMainWindow):
         cal.clicked.connect(pick); vl.addWidget(cal); dlg.exec()
 
     def _on_quick_period(self, text):
-        from datetime import date as _d, timedelta
-        today=_d.today(); y=today.year
-        try: y=int(self.sum_year.currentText())
+        from datetime import date as _d
+        # Показывать/скрывать выбор года
+        needs_year = any(text.startswith(q) for q in ["1 кв","2 кв","3 кв","4 кв","1 пол","2 пол","За год"])
+        self.sum_year.setVisible(needs_year)
+
+        today = _d.today()
+        y = today.year
+        try:
+            if needs_year and self.sum_year.currentText():
+                y = int(self.sum_year.currentText())
         except: pass
-        ranges={
+
+        ranges = {
             "1 квартал":    (_d(y,1,1),  _d(y,3,31)),
             "2 квартал":    (_d(y,4,1),  _d(y,6,30)),
             "3 квартал":    (_d(y,7,1),  _d(y,9,30)),
@@ -1748,15 +1785,13 @@ class App(QMainWindow):
             "За год":       (_d(y,1,1),  _d(y,12,31)),
         }
         if text == "За всё время":
-            self.sum_from.setText("2000-01-01")
-            self.sum_to.setText(_d.today().isoformat())
+            first = getattr(self, "_csv_first_date", "2000-01-01")
+            self.sum_from.setText(first)
+            self.sum_to.setText(today.isoformat())
         elif text in ranges:
             d_from, d_to = ranges[text]
             self.sum_from.setText(d_from.isoformat())
             self.sum_to.setText(d_to.isoformat())
-        # Показывать/скрывать выбор года
-        needs_year = any(text.startswith(q) for q in ["1 кв","2 кв","3 кв","4 кв","1 пол","2 пол","За год"])
-        self.sum_year.setVisible(needs_year)
 
     def _refresh_summary(self):
         from datetime import date as _d
